@@ -134,6 +134,13 @@ function isChildProcessRunning(child: ChildProcess): boolean {
   return child.exitCode == null && child.signalCode == null;
 }
 
+function requireAgentStdio(child: ChildProcess): ChildProcessByStdio<Writable, Readable, Readable> {
+  if (!child.stdin || !child.stdout || !child.stderr) {
+    throw new Error("ACP agent must be spawned with piped stdin/stdout/stderr");
+  }
+  return child as ChildProcessByStdio<Writable, Readable, Readable>;
+}
+
 function waitForChildExit(
   child: ChildProcessByStdio<Writable, Readable, Readable>,
   timeoutMs: number,
@@ -417,17 +424,18 @@ export class AcpClient {
     const { command, args } = splitCommandLine(this.options.agentCommand);
     this.log(`spawning agent: ${command} ${args.join(" ")}`);
 
-    const child = spawn(
+    const spawnedChild = spawn(
       command,
       args,
       buildAgentSpawnOptions(this.options.cwd, this.options.authCredentials),
     );
 
     try {
-      await waitForSpawn(child);
+      await waitForSpawn(spawnedChild);
     } catch (error) {
       throw new AgentSpawnError(this.options.agentCommand, error);
     }
+    const child = requireAgentStdio(spawnedChild);
     this.closing = false;
     this.agentStartedAt = isoNow();
     this.lastAgentExit = undefined;
