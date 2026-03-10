@@ -2,7 +2,6 @@ const ACP_ADAPTER_PACKAGE_RANGES = {
   pi: "^0.0.22",
   codex: "^0.9.5",
   claude: "^0.21.0",
-  droid: "^0.6.1",
 } as const;
 
 export const AGENT_REGISTRY: Record<string, string> = {
@@ -13,7 +12,7 @@ export const AGENT_REGISTRY: Record<string, string> = {
   gemini: "gemini --experimental-acp",
   cursor: "cursor-agent acp",
   copilot: "copilot --acp --stdio",
-  droid: `npx droid-acp@${ACP_ADAPTER_PACKAGE_RANGES.droid}`,
+  droid: "droid exec --output-format acp",
   kimi: "kimi acp",
   opencode: "npx -y opencode-ai acp",
   kiro: "kiro-cli acp",

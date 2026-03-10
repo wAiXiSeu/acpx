@@ -83,7 +83,7 @@ Friendly agent names resolve to commands:
 - `kilocode` -> `npx -y @kilocode/cli acp`
 - `cursor` -> `cursor-agent acp`
 - `qwen` -> `qwen --acp`
-- `droid` -> `npx droid-acp`
+- `droid` -> `droid exec --output-format acp`
 
 Rules:
 

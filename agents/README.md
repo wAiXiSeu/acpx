@@ -9,7 +9,7 @@ Built-in agents:
 - `gemini -> gemini --experimental-acp`
 - `cursor -> cursor-agent acp`
 - `copilot -> copilot --acp --stdio`
-- `droid -> npx droid-acp`
+- `droid -> droid exec --output-format acp`
 - `kimi -> kimi acp`
 - `opencode -> npx -y opencode-ai acp`
 - `kiro -> kiro-cli acp`
@@ -21,7 +21,7 @@ Harness-specific docs in this directory:
 - [Gemini](Gemini.md): built-in `gemini -> gemini --experimental-acp`
 - [Cursor](Cursor.md): built-in `cursor -> cursor-agent acp`
 - [Copilot](Copilot.md): built-in `copilot -> copilot --acp --stdio`
-- [Droid](Droid.md): built-in `droid -> npx droid-acp`
+- [Droid](Droid.md): built-in `droid -> droid exec --output-format acp`
 - [Kimi](Kimi.md): built-in `kimi -> kimi acp`
 - [OpenCode](OpenCode.md): built-in `opencode -> npx -y opencode-ai acp`
 - [Kiro](Kiro.md): built-in `kiro -> kiro-cli acp`

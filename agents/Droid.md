@@ -1,5 +1,5 @@
 # Droid
 
 - Built-in name: `droid`
-- Default command: `npx droid-acp`
+- Default command: `droid exec --output-format acp`
 - Upstream: https://www.factory.ai
