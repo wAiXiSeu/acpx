@@ -81,7 +81,9 @@ Friendly agent names resolve to commands:
 - `kiro` -> `kiro-cli acp`
 - `pi` -> `npx pi-acp`
 - `kilocode` -> `npx -y @kilocode/cli acp`
+- `cursor` -> `cursor-agent acp`
 - `qwen` -> `qwen --acp`
+- `droid` -> `npx droid-acp`
 
 Rules:
 

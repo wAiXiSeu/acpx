@@ -29,6 +29,7 @@ test("listBuiltInAgents preserves the required built-in example order", () => {
     "cursor",
     "copilot",
   ]);
+  assert.equal(agents[7], "droid");
 });
 
 test("default agent is codex", () => {
