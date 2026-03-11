@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { buildAgentSpawnOptions, buildSpawnCommandOptions } from "../src/client.js";
 import { buildQueueOwnerSpawnOptions } from "../src/session-runtime/queue-owner-process.js";
@@ -52,19 +55,49 @@ test("buildSpawnCommandOptions enables shell for .cmd/.bat on Windows", () => {
   assert.equal(cmdOptions.windowsHide, true);
 });
 
-test("buildSpawnCommandOptions keeps shell disabled for non-batch commands", () => {
+test("buildSpawnCommandOptions enables shell for PATH-resolved .cmd wrappers on Windows", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-windows-spawn-"));
+  const env = {
+    PATH: tempDir,
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  };
   const base = {
     stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
     windowsHide: true,
   };
 
-  const linuxOptions = buildSpawnCommandOptions("/usr/bin/npx", base, "linux");
-  const windowsExeOptions = buildSpawnCommandOptions(
-    "C:\\Program Files\\nodejs\\node.exe",
-    base,
-    "win32",
-  );
+  try {
+    await fs.writeFile(path.join(tempDir, "npx.cmd"), "@echo off\r\n");
 
-  assert.equal(linuxOptions.shell, undefined);
-  assert.equal(windowsExeOptions.shell, undefined);
+    const options = buildSpawnCommandOptions("npx", base, "win32", env);
+    assert.equal(options.shell, true);
+    assert.deepEqual(options.stdio, base.stdio);
+    assert.equal(options.windowsHide, true);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildSpawnCommandOptions keeps shell disabled for non-batch commands", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-windows-spawn-"));
+  const env = {
+    PATH: tempDir,
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  };
+  const base = {
+    stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  };
+
+  try {
+    await fs.writeFile(path.join(tempDir, "node.exe"), "");
+
+    const linuxOptions = buildSpawnCommandOptions("/usr/bin/npx", base, "linux");
+    const windowsExeOptions = buildSpawnCommandOptions("node", base, "win32", env);
+
+    assert.equal(linuxOptions.shell, undefined);
+    assert.equal(windowsExeOptions.shell, undefined);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 });
