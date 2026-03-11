@@ -2,12 +2,13 @@ import net from "node:net";
 import type { SetSessionConfigOptionResponse } from "@agentclientprotocol/sdk";
 import { normalizeOutputError } from "./error-normalization.js";
 import { recordPerfDuration } from "./perf-metrics.js";
+import { textPrompt } from "./prompt-content.js";
 import {
   parseQueueRequest,
   type QueueOwnerErrorMessage,
   type QueueOwnerMessage,
 } from "./queue-messages.js";
-import type { NonInteractivePermissionPolicy, PermissionMode } from "./types.js";
+import type { NonInteractivePermissionPolicy, PermissionMode, PromptInput } from "./types.js";
 
 type QueueOwnerSocketLease = {
   socketPath: string;
@@ -71,6 +72,7 @@ function writeQueueMessage(socket: net.Socket, message: QueueOwnerMessage): void
 export type QueueTask = {
   requestId: string;
   message: string;
+  prompt: PromptInput;
   permissionMode: PermissionMode;
   nonInteractivePermissions?: NonInteractivePermissionPolicy;
   timeoutMs?: number;
@@ -275,6 +277,42 @@ export class SessionQueueOwner {
     this.emitQueueDepth();
   }
 
+  private handleControlRequest<TMessage extends QueueOwnerMessage>(options: {
+    socket: net.Socket;
+    requestId: string;
+    run: () => Promise<TMessage>;
+  }): void {
+    writeQueueMessage(options.socket, {
+      type: "accepted",
+      requestId: options.requestId,
+      ownerGeneration: this.ownerGeneration,
+    });
+
+    void options
+      .run()
+      .then((message) => {
+        writeQueueMessage(options.socket, {
+          ...message,
+          ownerGeneration: this.ownerGeneration,
+        });
+      })
+      .catch((error) => {
+        writeQueueMessage(options.socket, {
+          ...makeQueueOwnerErrorFromUnknown(
+            options.requestId,
+            error,
+            "QUEUE_CONTROL_REQUEST_FAILED",
+          ),
+          ownerGeneration: this.ownerGeneration,
+        });
+      })
+      .finally(() => {
+        if (!options.socket.destroyed) {
+          options.socket.end();
+        }
+      });
+  }
+
   private handleConnection(socket: net.Socket): void {
     socket.setEncoding("utf8");
 
@@ -336,110 +374,55 @@ export class SessionQueueOwner {
       }
 
       if (request.type === "cancel_prompt") {
-        writeQueueMessage(socket, {
-          type: "accepted",
+        this.handleControlRequest({
+          socket,
           requestId: request.requestId,
-          ownerGeneration: this.ownerGeneration,
+          run: async () => ({
+            type: "cancel_result",
+            requestId: request.requestId,
+            cancelled: await this.controlHandlers.cancelPrompt(),
+          }),
         });
-        void this.controlHandlers
-          .cancelPrompt()
-          .then((cancelled) => {
-            writeQueueMessage(socket, {
-              type: "cancel_result",
-              requestId: request.requestId,
-              ownerGeneration: this.ownerGeneration,
-              cancelled,
-            });
-          })
-          .catch((error) => {
-            writeQueueMessage(socket, {
-              ...makeQueueOwnerErrorFromUnknown(
-                request.requestId,
-                error,
-                "QUEUE_CONTROL_REQUEST_FAILED",
-              ),
-              ownerGeneration: this.ownerGeneration,
-            });
-          })
-          .finally(() => {
-            if (!socket.destroyed) {
-              socket.end();
-            }
-          });
         return;
       }
 
       if (request.type === "set_mode") {
-        writeQueueMessage(socket, {
-          type: "accepted",
+        this.handleControlRequest({
+          socket,
           requestId: request.requestId,
-          ownerGeneration: this.ownerGeneration,
-        });
-        void this.controlHandlers
-          .setSessionMode(request.modeId, request.timeoutMs)
-          .then(() => {
-            writeQueueMessage(socket, {
+          run: async () => {
+            await this.controlHandlers.setSessionMode(request.modeId, request.timeoutMs);
+            return {
               type: "set_mode_result",
               requestId: request.requestId,
-              ownerGeneration: this.ownerGeneration,
               modeId: request.modeId,
-            });
-          })
-          .catch((error) => {
-            writeQueueMessage(socket, {
-              ...makeQueueOwnerErrorFromUnknown(
-                request.requestId,
-                error,
-                "QUEUE_CONTROL_REQUEST_FAILED",
-              ),
-              ownerGeneration: this.ownerGeneration,
-            });
-          })
-          .finally(() => {
-            if (!socket.destroyed) {
-              socket.end();
-            }
-          });
+            };
+          },
+        });
         return;
       }
 
       if (request.type === "set_config_option") {
-        writeQueueMessage(socket, {
-          type: "accepted",
+        this.handleControlRequest({
+          socket,
           requestId: request.requestId,
-          ownerGeneration: this.ownerGeneration,
+          run: async () => ({
+            type: "set_config_option_result",
+            requestId: request.requestId,
+            response: await this.controlHandlers.setSessionConfigOption(
+              request.configId,
+              request.value,
+              request.timeoutMs,
+            ),
+          }),
         });
-        void this.controlHandlers
-          .setSessionConfigOption(request.configId, request.value, request.timeoutMs)
-          .then((response) => {
-            writeQueueMessage(socket, {
-              type: "set_config_option_result",
-              requestId: request.requestId,
-              ownerGeneration: this.ownerGeneration,
-              response,
-            });
-          })
-          .catch((error) => {
-            writeQueueMessage(socket, {
-              ...makeQueueOwnerErrorFromUnknown(
-                request.requestId,
-                error,
-                "QUEUE_CONTROL_REQUEST_FAILED",
-              ),
-              ownerGeneration: this.ownerGeneration,
-            });
-          })
-          .finally(() => {
-            if (!socket.destroyed) {
-              socket.end();
-            }
-          });
         return;
       }
 
       const task: QueueTask = {
         requestId: request.requestId,
         message: request.message,
+        prompt: request.prompt ?? textPrompt(request.message),
         permissionMode: request.permissionMode,
         nonInteractivePermissions: request.nonInteractivePermissions,
         timeoutMs: request.timeoutMs,
