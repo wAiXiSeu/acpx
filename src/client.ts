@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./errors.js";
 import { FileSystemHandlers } from "./filesystem.js";
 import { classifyPermissionDecision, resolvePermissionRequest } from "./permissions.js";
+import { textPrompt } from "./prompt-content.js";
 import { extractRuntimeSessionId } from "./runtime-session-id.js";
 import { TimeoutError, withTimeout } from "./session-runtime-helpers.js";
 import { TerminalManager } from "./terminal.js";
@@ -48,6 +50,7 @@ import type {
   NonInteractivePermissionPolicy,
   PermissionMode,
   PermissionStats,
+  PromptInput,
 } from "./types.js";
 
 type CommandParts = {
@@ -64,6 +67,7 @@ const AGENT_CLOSE_KILL_GRACE_MS = 1_000;
 const GEMINI_ACP_STARTUP_TIMEOUT_MS = 15_000;
 const CLAUDE_ACP_SESSION_CREATE_TIMEOUT_MS = 60_000;
 const GEMINI_VERSION_TIMEOUT_MS = 2_000;
+const GEMINI_ACP_FLAG_VERSION = [0, 33, 0] as const;
 const COPILOT_HELP_TIMEOUT_MS = 2_000;
 
 type LoadSessionOptions = {
@@ -87,6 +91,11 @@ type AuthSelection = {
   methodId: string;
   credential: string;
   source: "env" | "config";
+};
+
+type GeminiVersion = {
+  raw: string;
+  parts: [number, number, number];
 };
 
 export type AgentExitInfo = {
@@ -271,7 +280,10 @@ function basenameToken(value: string): string {
 }
 
 function isGeminiAcpCommand(command: string, args: readonly string[]): boolean {
-  return basenameToken(command) === "gemini" && args.includes("--experimental-acp");
+  return (
+    basenameToken(command) === "gemini" &&
+    (args.includes("--acp") || args.includes("--experimental-acp"))
+  );
 }
 
 function isClaudeAcpCommand(command: string, args: readonly string[]): boolean {
@@ -284,6 +296,79 @@ function isClaudeAcpCommand(command: string, args: readonly string[]): boolean {
 
 function isCopilotAcpCommand(command: string, args: readonly string[]): boolean {
   return basenameToken(command) === "copilot" && args.includes("--acp");
+}
+
+function readWindowsEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const matchedKey = Object.keys(env).find((entry) => entry.toUpperCase() === key);
+  return matchedKey ? env[matchedKey] : undefined;
+}
+
+function resolveWindowsCommand(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const extensions = (readWindowsEnvValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  const commandExtension = path.extname(command);
+  const candidates =
+    commandExtension.length > 0
+      ? [command]
+      : extensions.map((extension) => `${command}${extension}`);
+  const hasPath = command.includes("/") || command.includes("\\") || path.isAbsolute(command);
+
+  if (hasPath) {
+    return candidates.find((candidate) => fs.existsSync(candidate));
+  }
+
+  const pathValue = readWindowsEnvValue(env, "PATH");
+  if (!pathValue) {
+    return undefined;
+  }
+
+  for (const directory of pathValue.split(";")) {
+    const trimmedDirectory = directory.trim();
+    if (trimmedDirectory.length === 0) {
+      continue;
+    }
+    for (const candidate of candidates) {
+      const resolved = path.join(trimmedDirectory, candidate);
+      if (fs.existsSync(resolved)) {
+        return resolved;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function shouldUseWindowsBatchShell(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (platform !== "win32") {
+    return false;
+  }
+  const resolvedCommand = resolveWindowsCommand(command, env) ?? command;
+  const ext = path.extname(resolvedCommand).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
+export function buildSpawnCommandOptions(
+  command: string,
+  options: Parameters<typeof spawn>[2],
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): Parameters<typeof spawn>[2] {
+  if (!shouldUseWindowsBatchShell(command, platform, env)) {
+    return options;
+  }
+  return {
+    ...options,
+    shell: true,
+  };
 }
 
 function resolveGeminiAcpStartupTimeoutMs(): number {
@@ -308,17 +393,49 @@ function resolveClaudeAcpSessionCreateTimeoutMs(): number {
   return CLAUDE_ACP_SESSION_CREATE_TIMEOUT_MS;
 }
 
-async function detectGeminiVersion(command: string): Promise<string | undefined> {
-  return await new Promise<string | undefined>((resolve) => {
-    const child = spawn(command, ["--version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+function parseGeminiVersion(value: string | undefined): GeminiVersion | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  const match = normalized.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    raw: normalized,
+    parts: [Number(match[1]), Number(match[2]), Number(match[3])],
+  };
+}
+
+function compareVersionParts(left: readonly number[], right: readonly number[]): number {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const leftPart = left[index] ?? 0;
+    const rightPart = right[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+  return 0;
+}
+
+async function detectGeminiVersion(command: string): Promise<GeminiVersion | undefined> {
+  return await new Promise<GeminiVersion | undefined>((resolve) => {
+    const child = spawn(
+      command,
+      ["--version"],
+      buildSpawnCommandOptions(command, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      }),
+    );
 
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const finish = (value: string | undefined) => {
+    const finish = (value: GeminiVersion | undefined) => {
       if (settled) {
         return;
       }
@@ -346,13 +463,29 @@ async function detectGeminiVersion(command: string): Promise<string | undefined>
       finish(undefined);
     });
     child.once("close", () => {
-      const combined = `${stdout}\n${stderr}`
+      const versionLine = `${stdout}\n${stderr}`
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find((line) => /^\d+\.\d+\.\d+/.test(line));
-      finish(combined);
+        .find((line) => /\d+\.\d+\.\d+/.test(line));
+      finish(parseGeminiVersion(versionLine));
     });
   });
+}
+
+async function resolveGeminiCommandArgs(
+  command: string,
+  args: readonly string[],
+): Promise<string[]> {
+  if (basenameToken(command) !== "gemini" || !args.includes("--acp")) {
+    return [...args];
+  }
+
+  const version = await detectGeminiVersion(command);
+  if (version && compareVersionParts(version.parts, GEMINI_ACP_FLAG_VERSION) < 0) {
+    return args.map((arg) => (arg === "--acp" ? "--experimental-acp" : arg));
+  }
+
+  return [...args];
 }
 
 async function readCommandOutput(
@@ -361,10 +494,14 @@ async function readCommandOutput(
   timeoutMs: number,
 ): Promise<string | undefined> {
   return await new Promise<string | undefined>((resolve) => {
-    const child = spawn(command, [...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    const child = spawn(
+      command,
+      [...args],
+      buildSpawnCommandOptions(command, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      }),
+    );
 
     let stdout = "";
     let stderr = "";
@@ -410,7 +547,7 @@ async function buildGeminiAcpStartupTimeoutMessage(command: string): Promise<str
 
   const version = await detectGeminiVersion(command);
   if (version) {
-    parts.push(`Detected Gemini CLI version: ${version}.`);
+    parts.push(`Detected Gemini CLI version: ${version.raw}.`);
   }
 
   if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
@@ -727,7 +864,8 @@ export class AcpClient {
       await this.close();
     }
 
-    const { command, args } = splitCommandLine(this.options.agentCommand);
+    const { command, args: initialArgs } = splitCommandLine(this.options.agentCommand);
+    const args = await resolveGeminiCommandArgs(command, initialArgs);
     this.log(`spawning agent: ${command} ${args.join(" ")}`);
     const geminiAcp = isGeminiAcpCommand(command, args);
     const copilotAcp = isCopilotAcpCommand(command, args);
@@ -739,7 +877,10 @@ export class AcpClient {
     const spawnedChild = spawn(
       command,
       args,
-      buildAgentSpawnOptions(this.options.cwd, this.options.authCredentials),
+      buildSpawnCommandOptions(
+        command,
+        buildAgentSpawnOptions(this.options.cwd, this.options.authCredentials),
+      ),
     ) as ChildProcessByStdio<Writable, Readable, Readable>;
 
     try {
@@ -976,7 +1117,7 @@ export class AcpClient {
     };
   }
 
-  async prompt(sessionId: string, text: string): Promise<PromptResponse> {
+  async prompt(sessionId: string, prompt: PromptInput | string): Promise<PromptResponse> {
     const connection = this.getConnection();
     const restoreConsoleError = this.options.suppressSdkConsoleErrors
       ? installSdkConsoleErrorSuppression()
@@ -986,12 +1127,7 @@ export class AcpClient {
     try {
       promptPromise = connection.prompt({
         sessionId,
-        prompt: [
-          {
-            type: "text",
-            text,
-          },
-        ],
+        prompt: typeof prompt === "string" ? textPrompt(prompt) : prompt,
       });
     } catch (error) {
       restoreConsoleError?.();
