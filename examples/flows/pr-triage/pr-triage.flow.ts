@@ -44,6 +44,38 @@ const flow = {
       parse: (text) => extractJson(text),
     },
 
+    check_initial_conflicts: {
+      kind: "action",
+      timeoutMs: 20 * 60_000,
+      statusDetail: "Check conflict status against the current base before validation",
+      run: async ({ outputs }) =>
+        await collectConflictState(prepared(outputs), {
+          phase: "initial",
+        }),
+    },
+
+    judge_initial_conflicts: {
+      kind: "acp",
+      session: MAIN_SESSION,
+      cwd: ({ outputs }) => prepared(outputs).workdir,
+      timeoutMs: 20 * 60_000,
+      async prompt({ outputs }) {
+        return promptJudgeInitialConflicts(prepared(outputs), outputs);
+      },
+      parse: (text) => extractJson(text),
+    },
+
+    resolve_initial_conflicts: {
+      kind: "acp",
+      session: MAIN_SESSION,
+      cwd: ({ outputs }) => prepared(outputs).workdir,
+      timeoutMs: 30 * 60_000,
+      async prompt({ outputs }) {
+        return promptResolveInitialConflicts(prepared(outputs), outputs);
+      },
+      parse: (text) => extractJson(text),
+    },
+
     bug_or_feature: {
       kind: "acp",
       session: MAIN_SESSION,
@@ -127,6 +159,38 @@ const flow = {
       parse: (text) => extractJson(text),
     },
 
+    check_final_conflicts: {
+      kind: "action",
+      timeoutMs: 20 * 60_000,
+      statusDetail: "Check conflict status against the current base before final handoff",
+      run: async ({ outputs }) =>
+        await collectConflictState(prepared(outputs), {
+          phase: "final",
+        }),
+    },
+
+    judge_final_conflicts: {
+      kind: "acp",
+      session: MAIN_SESSION,
+      cwd: ({ outputs }) => prepared(outputs).workdir,
+      timeoutMs: 20 * 60_000,
+      async prompt({ outputs }) {
+        return promptJudgeFinalConflicts(prepared(outputs), outputs);
+      },
+      parse: (text) => extractJson(text),
+    },
+
+    resolve_final_conflicts: {
+      kind: "acp",
+      session: MAIN_SESSION,
+      cwd: ({ outputs }) => prepared(outputs).workdir,
+      timeoutMs: 30 * 60_000,
+      async prompt({ outputs }) {
+        return promptResolveFinalConflicts(prepared(outputs), outputs);
+      },
+      parse: (text) => extractJson(text),
+    },
+
     comment_and_close_pr: {
       kind: "acp",
       session: MAIN_SESSION,
@@ -176,9 +240,19 @@ const flow = {
         solution: outputs.judge_solution ?? null,
         validationPath: outputs.bug_or_feature ?? null,
         validation: outputs.reproduce_bug_and_test_fix ?? outputs.test_feature_directly ?? null,
+        initialConflict:
+          outputs.check_initial_conflicts ??
+          outputs.judge_initial_conflicts ??
+          outputs.resolve_initial_conflicts ??
+          null,
         refactor: outputs.judge_refactor ?? null,
         review: outputs.review_loop ?? null,
         ci: outputs.fix_ci_failures ?? null,
+        finalConflict:
+          outputs.check_final_conflicts ??
+          outputs.judge_final_conflicts ??
+          outputs.resolve_final_conflicts ??
+          null,
         workspace: outputs.prepare_workspace ?? null,
         sessionBindings: state.sessionBindings,
       }),
@@ -195,7 +269,37 @@ const flow = {
         cases: {
           close_pr: "comment_and_close_pr",
           comment_and_escalate_to_human: "comment_and_escalate_to_human",
+          bug_or_feature: "check_initial_conflicts",
+        },
+      },
+    },
+    {
+      from: "check_initial_conflicts",
+      switch: {
+        on: "$.route",
+        cases: {
           bug_or_feature: "bug_or_feature",
+          judge_initial_conflicts: "judge_initial_conflicts",
+        },
+      },
+    },
+    {
+      from: "judge_initial_conflicts",
+      switch: {
+        on: "$.route",
+        cases: {
+          resolve_initial_conflicts: "resolve_initial_conflicts",
+          comment_and_escalate_to_human: "comment_and_escalate_to_human",
+        },
+      },
+    },
+    {
+      from: "resolve_initial_conflicts",
+      switch: {
+        on: "$.route",
+        cases: {
+          bug_or_feature: "bug_or_feature",
+          comment_and_escalate_to_human: "comment_and_escalate_to_human",
         },
       },
     },
@@ -257,6 +361,37 @@ const flow = {
     { from: "collect_ci_state", to: "fix_ci_failures" },
     {
       from: "fix_ci_failures",
+      switch: {
+        on: "$.route",
+        cases: {
+          collect_ci_state: "collect_ci_state",
+          check_final_conflicts: "check_final_conflicts",
+          comment_and_escalate_to_human: "comment_and_escalate_to_human",
+        },
+      },
+    },
+    {
+      from: "check_final_conflicts",
+      switch: {
+        on: "$.route",
+        cases: {
+          comment_and_escalate_to_human: "comment_and_escalate_to_human",
+          judge_final_conflicts: "judge_final_conflicts",
+        },
+      },
+    },
+    {
+      from: "judge_final_conflicts",
+      switch: {
+        on: "$.route",
+        cases: {
+          comment_and_escalate_to_human: "comment_and_escalate_to_human",
+          resolve_final_conflicts: "resolve_final_conflicts",
+        },
+      },
+    },
+    {
+      from: "resolve_final_conflicts",
       switch: {
         on: "$.route",
         cases: {
@@ -598,6 +733,65 @@ async function collectCiState(pr) {
   };
 }
 
+async function collectConflictState(pr, options) {
+  const baseRef = `origin/${pr.baseRef}`;
+  await cleanupMergeState(pr.workdir);
+  await runCommand("git", ["-C", pr.workdir, "fetch", "origin", pr.baseRef]);
+
+  const attempt = await runCommand(
+    "git",
+    ["-C", pr.workdir, "merge", "--no-commit", "--no-ff", baseRef],
+    {
+      allowFailure: true,
+    },
+  );
+
+  const conflictedFiles = (
+    await runCommand("git", ["-C", pr.workdir, "diff", "--name-only", "--diff-filter=U"], {
+      allowFailure: true,
+    })
+  ).stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const clean = attempt.exitCode === 0;
+  const conflictStatus = clean ? "clean" : "conflicts_detected";
+  const route = clean
+    ? options.phase === "initial"
+      ? "bug_or_feature"
+      : "comment_and_escalate_to_human"
+    : options.phase === "initial"
+      ? "judge_initial_conflicts"
+      : "judge_final_conflicts";
+
+  const conflictState = {
+    phase: options.phase,
+    baseRef,
+    conflict_status: conflictStatus,
+    route,
+    conflicted_files: conflictedFiles,
+    merge_attempt_exit_code: attempt.exitCode,
+    merge_attempt_stdout: trimTextTail(attempt.stdout, 8_000),
+    merge_attempt_stderr: trimTextTail(attempt.stderr, 8_000),
+  };
+  const statePath = path.join(pr.flowDir, `${options.phase}-conflict-state.json`);
+  await writeJson(statePath, conflictState);
+
+  if (clean) {
+    await cleanupMergeState(pr.workdir);
+  }
+
+  return {
+    ...conflictState,
+    conflict_state_path: statePath,
+    summary:
+      conflictStatus === "clean"
+        ? `No conflicts were detected against ${baseRef}.`
+        : `Conflicts were detected against ${baseRef} and need conflict judgment before the flow can continue.`,
+  };
+}
+
 async function postClosePr(pr, commentStep) {
   const comment = String(commentStep?.comment ?? "").trim();
   if (!comment) {
@@ -691,7 +885,7 @@ function promptJudgeSolution(pr) {
     '- "needs_human_call" if it seems plausible but needs a design decision or human call before continuing.',
     "Route `close_pr` for localized_fix, bad_fix, or unclear.",
     "Route `comment_and_escalate_to_human` for needs_human_call.",
-    "Route `bug_or_feature` for good_enough.",
+    "Route `bug_or_feature` for good_enough. The conflict gate runs immediately after this step.",
     "Return exactly one JSON object and nothing else:",
     "{",
     '  "verdict": "good_enough" | "localized_fix" | "bad_fix" | "unclear" | "needs_human_call",',
@@ -717,6 +911,51 @@ function promptBugOrFeature(pr) {
     '  "kind": "bug" | "feature" | "unclear",',
     '  "route": "reproduce_bug_and_test_fix" | "test_feature_directly" | "comment_and_escalate_to_human",',
     '  "reason": "short explanation"',
+    "}",
+  ].join("\n");
+}
+
+function promptJudgeInitialConflicts(pr, outputs) {
+  const conflictStatePath =
+    outputs.check_initial_conflicts?.conflict_state_path ??
+    `${FLOW_DIR}/initial-conflict-state.json`;
+  return [
+    "You are still in the same PR session inside the isolated workspace.",
+    `Target PR: ${prRef(pr)}`,
+    `The runtime already attempted a merge against the current base and left the worktree in the conflict state. Read ${conflictStatePath} for the conflict summary and inspect the conflicted files directly in the repo.`,
+    "Decide whether the conflict has a clear resolution path or needs human judgment.",
+    "Use `clear_resolution_path` if the correct merged result is apparent from the PR intent plus the current base, even when code moved or was refactored.",
+    "Use `needs_human_judgment` if resolving the conflict requires choosing behavior, design, or architecture rather than integrating both sides safely.",
+    "If the correct move is to keep the current-base refactor and port the PR's behavior into the new structure, that still counts as `clear_resolution_path`.",
+    "Route `resolve_initial_conflicts` for `clear_resolution_path`.",
+    "Route `comment_and_escalate_to_human` for `needs_human_judgment`.",
+    "Return exactly one JSON object and nothing else:",
+    "{",
+    '  "conflict_assessment": "clear_resolution_path" | "needs_human_judgment",',
+    '  "route": "resolve_initial_conflicts" | "comment_and_escalate_to_human",',
+    '  "reason": "short explanation"',
+    "}",
+  ].join("\n");
+}
+
+function promptResolveInitialConflicts(pr, outputs) {
+  const conflictStatePath =
+    outputs.check_initial_conflicts?.conflict_state_path ??
+    `${FLOW_DIR}/initial-conflict-state.json`;
+  return [
+    "You are still in the same PR session inside the isolated workspace.",
+    `Target PR: ${prRef(pr)}`,
+    `The runtime already prepared a merge-conflict state for this PR. Read ${conflictStatePath} for the conflict summary and inspect the conflicted files directly in the repo.`,
+    `Use the local branch ${pr.localBranch}. If you need to push, use remote ${pr.pushRemote} branch ${pr.pushRef}.`,
+    "Resolve the conflict only because you already judged that it has a clear resolution path while preserving the intended PR behavior.",
+    "If you cannot resolve the conflicts confidently, do not guess. Route to `comment_and_escalate_to_human` instead.",
+    "If you resolve them, finish the merge, run focused checks when feasible, commit the merge result if needed, push the branch yourself, and route to `bug_or_feature`.",
+    "Return exactly one JSON object and nothing else:",
+    "{",
+    '  "route": "bug_or_feature" | "comment_and_escalate_to_human",',
+    '  "summary": "short explanation",',
+    '  "files_touched": ["path/to/file"],',
+    '  "committed": true | false',
     "}",
   ].join("\n");
 }
@@ -804,17 +1043,62 @@ function promptFixCiFailures(pr, outputs) {
     "If the runtime already approved or attempted to approve workflow runs, treat that as the current ground truth and focus on the remaining CI result.",
     "If related failures remain and you can fix them, fix them directly in the repo, run focused checks when feasible, rerun the earlier targeted validation, commit and push the branch yourself, and then route back to `collect_ci_state` so the flow runtime can re-check CI.",
     `Latest validation summary: ${validation?.summary ?? "none"}.`,
-    "If CI is green or the remaining failures are clearly unrelated, route to `comment_and_escalate_to_human` for the final human handoff.",
+    "If CI is green or the remaining failures are clearly unrelated, route to `check_final_conflicts` so the final conflict gate can run before the human handoff.",
     "If the only remaining blocker is workflow approval that the runtime could not clear, route to `comment_and_escalate_to_human` and make that the explicit human action needed next.",
     "Return exactly one JSON object and nothing else:",
     "{",
-    '  "route": "collect_ci_state" | "comment_and_escalate_to_human",',
+    '  "route": "collect_ci_state" | "check_final_conflicts" | "comment_and_escalate_to_human",',
     '  "ci_status": "related_failures_remain" | "green_or_unrelated" | "approval_blocked",',
     '  "summary": "short explanation",',
     '  "related_failures": ["brief failure"],',
     '  "unrelated_failures": ["brief failure"],',
     '  "workflow_approval_attempted": true | false,',
     '  "workflow_approved": true | false,',
+    '  "committed": true | false',
+    "}",
+  ].join("\n");
+}
+
+function promptJudgeFinalConflicts(pr, outputs) {
+  const conflictStatePath =
+    outputs.check_final_conflicts?.conflict_state_path ?? `${FLOW_DIR}/final-conflict-state.json`;
+  return [
+    "You are still in the same PR session inside the isolated workspace.",
+    `Target PR: ${prRef(pr)}`,
+    `The runtime already attempted a merge against the current base and left the worktree in the conflict state. Read ${conflictStatePath} for the conflict summary and inspect the conflicted files directly in the repo.`,
+    "Decide whether the conflict has a clear resolution path or needs human judgment.",
+    "Use `clear_resolution_path` if the correct merged result is apparent from the PR intent plus the current base, even when code moved or was refactored.",
+    "Use `needs_human_judgment` if resolving the conflict requires choosing behavior, design, or architecture rather than integrating both sides safely.",
+    "If the correct move is to keep the current-base refactor and port the PR's behavior into the new structure, that still counts as `clear_resolution_path`.",
+    "Route `resolve_final_conflicts` for `clear_resolution_path`.",
+    "Route `comment_and_escalate_to_human` for `needs_human_judgment`.",
+    "Return exactly one JSON object and nothing else:",
+    "{",
+    '  "conflict_assessment": "clear_resolution_path" | "needs_human_judgment",',
+    '  "route": "resolve_final_conflicts" | "comment_and_escalate_to_human",',
+    '  "reason": "short explanation"',
+    "}",
+  ].join("\n");
+}
+
+function promptResolveFinalConflicts(pr, outputs) {
+  const conflictStatePath =
+    outputs.check_final_conflicts?.conflict_state_path ?? `${FLOW_DIR}/final-conflict-state.json`;
+  const validation = outputs.reproduce_bug_and_test_fix ?? outputs.test_feature_directly ?? null;
+  return [
+    "You are still in the same PR session inside the isolated workspace.",
+    `Target PR: ${prRef(pr)}`,
+    `The runtime already prepared a merge-conflict state for this PR. Read ${conflictStatePath} for the conflict summary and inspect the conflicted files directly in the repo.`,
+    `Use the local branch ${pr.localBranch}. If you need to push, use remote ${pr.pushRemote} branch ${pr.pushRef}.`,
+    "Resolve the conflict only because you already judged that it has a clear resolution path while preserving the intended PR behavior.",
+    "If you cannot resolve the conflicts confidently, do not guess. Route to `comment_and_escalate_to_human` instead.",
+    `If you resolve them, rerun the earlier targeted validation before returning. Latest validation summary: ${validation?.summary ?? "none"}.`,
+    "After resolving and pushing the branch, route back to `collect_ci_state` so the flow runtime can rerun the final CI path.",
+    "Return exactly one JSON object and nothing else:",
+    "{",
+    '  "route": "collect_ci_state" | "comment_and_escalate_to_human",',
+    '  "summary": "short explanation",',
+    '  "files_touched": ["path/to/file"],',
     '  "committed": true | false',
     "}",
   ].join("\n");
@@ -854,6 +1138,8 @@ function promptCommentAndEscalate(pr, outputs) {
     "- `Human attention: ⚠️ Required`",
     "- `Recommendation: 🏁 escalate to a human`",
     "- `Human decision needed: <explicit next human action>` near the top of the comment",
+    "If the final conflict gate is clean and CI is green or unrelated, make the human decision needed `ready for human landing decision`.",
+    "If the blocker is a conflict that still needs human judgment or another earlier stop condition, say that plainly in `Human decision needed`.",
     "If the remaining blocker is workflow approval, say that plainly.",
     "Use the current run state below as the source of truth:",
     JSON.stringify(summary, null, 2),
@@ -902,11 +1188,21 @@ function finalCommentSummary(outputs) {
   return {
     intent: outputs.extract_intent ?? null,
     solution: outputs.judge_solution ?? null,
+    initialConflict:
+      outputs.check_initial_conflicts ??
+      outputs.judge_initial_conflicts ??
+      outputs.resolve_initial_conflicts ??
+      null,
     validationPath: outputs.bug_or_feature ?? null,
     validation: outputs.reproduce_bug_and_test_fix ?? outputs.test_feature_directly ?? null,
     refactor: outputs.judge_refactor ?? null,
     review: outputs.review_loop ?? null,
     ci: outputs.fix_ci_failures ?? null,
+    finalConflict:
+      outputs.check_final_conflicts ??
+      outputs.judge_final_conflicts ??
+      outputs.resolve_final_conflicts ??
+      null,
   };
 }
 
@@ -1038,6 +1334,15 @@ function isTestFile(filename) {
 
 async function writeJson(filename, value) {
   await fs.writeFile(filename, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function cleanupMergeState(workdir) {
+  await runCommand("git", ["-C", workdir, "merge", "--abort"], {
+    allowFailure: true,
+  });
+  await runCommand("git", ["-C", workdir, "reset", "--hard", "HEAD"], {
+    allowFailure: true,
+  });
 }
 
 function trimTextTail(text, maxChars) {
