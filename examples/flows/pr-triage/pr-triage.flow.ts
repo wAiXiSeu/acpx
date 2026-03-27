@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { extractJsonObject } from "../../../src/flows.js";
+import { selectLocalCodexReviewText } from "./review-text.js";
 
 const FLOW_DIR = ".acpx-flow";
 const MAIN_SESSION = {
@@ -13,39 +15,39 @@ const flow = {
   startAt: "load_pr",
   nodes: {
     load_pr: {
-      kind: "compute",
+      nodeType: "compute",
       run: ({ input }) => loadPullRequestInput(input),
     },
 
     prepare_workspace: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 20 * 60_000,
       statusDetail: "Create isolated PR workspace and fetch GitHub context",
       run: async ({ outputs }) => await prepareWorkspace(loadPrOutput(outputs)),
     },
 
     extract_intent: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       async prompt({ outputs }) {
         return promptExtractIntent(prepared(outputs));
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     judge_solution: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       async prompt({ outputs }) {
         return promptJudgeSolution(prepared(outputs));
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     check_initial_conflicts: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 20 * 60_000,
       statusDetail: "Check conflict status against the current base before validation",
       run: async ({ outputs }) =>
@@ -55,39 +57,39 @@ const flow = {
     },
 
     judge_initial_conflicts: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 20 * 60_000,
       async prompt({ outputs }) {
         return promptJudgeInitialConflicts(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     resolve_initial_conflicts: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 30 * 60_000,
       async prompt({ outputs }) {
         return promptResolveInitialConflicts(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     bug_or_feature: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       async prompt({ outputs }) {
         return promptBugOrFeature(prepared(outputs));
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     reproduce_bug_and_test_fix: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 30 * 60_000,
       statusDetail: "Reproduce the bug and validate the fix in the isolated workspace",
       run: async ({ outputs }) =>
@@ -95,7 +97,7 @@ const flow = {
     },
 
     test_feature_directly: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 25 * 60_000,
       statusDetail: "Run direct feature validation in the isolated workspace",
       run: async ({ outputs }) =>
@@ -103,64 +105,64 @@ const flow = {
     },
 
     judge_refactor: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       async prompt({ outputs }) {
         return promptJudgeRefactor(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     do_superficial_refactor: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 25 * 60_000,
       async prompt({ outputs }) {
         return promptDoSuperficialRefactor(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     collect_review_state: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 60 * 60_000,
       statusDetail: "Collect GitHub review state and run local Codex review",
       run: async ({ outputs }) => await collectReviewState(prepared(outputs)),
     },
 
     review_loop: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 90 * 60_000,
       async prompt({ outputs }) {
         return promptReviewLoop(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     collect_ci_state: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 15 * 60_000,
       statusDetail: "Collect CI state and approve workflow runs when possible",
       run: async ({ outputs }) => await collectCiState(prepared(outputs)),
     },
 
     fix_ci_failures: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 30 * 60_000,
       async prompt({ outputs }) {
         return promptFixCiFailures(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     check_final_conflicts: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 20 * 60_000,
       statusDetail: "Check conflict status against the current base before final handoff",
       run: async ({ outputs }) =>
@@ -170,39 +172,39 @@ const flow = {
     },
 
     judge_final_conflicts: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 20 * 60_000,
       async prompt({ outputs }) {
         return promptJudgeFinalConflicts(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     resolve_final_conflicts: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       timeoutMs: 30 * 60_000,
       async prompt({ outputs }) {
         return promptResolveFinalConflicts(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     comment_and_close_pr: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       async prompt({ outputs }) {
         return promptCommentAndClose(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     post_close_pr: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 15 * 60_000,
       statusDetail: "Post close comment and close the PR",
       run: async ({ outputs }) =>
@@ -210,17 +212,17 @@ const flow = {
     },
 
     comment_and_escalate_to_human: {
-      kind: "acp",
+      nodeType: "acp",
       session: MAIN_SESSION,
       cwd: ({ outputs }) => prepared(outputs).workdir,
       async prompt({ outputs }) {
         return promptCommentAndEscalate(prepared(outputs), outputs);
       },
-      parse: (text) => extractJson(text),
+      parse: (text) => extractJsonObject(text),
     },
 
     post_escalation_comment: {
-      kind: "action",
+      nodeType: "action",
       timeoutMs: 10 * 60_000,
       statusDetail: "Post human handoff comment",
       run: async ({ outputs }) =>
@@ -228,7 +230,7 @@ const flow = {
     },
 
     finalize: {
-      kind: "compute",
+      nodeType: "compute",
       run: ({ outputs, state }) => ({
         final:
           outputs.post_close_pr ??
@@ -495,7 +497,7 @@ async function prepareWorkspace(pr) {
 }
 
 async function reproduceBugAndTestFix(pr, validationPath) {
-  if (validationPath?.kind !== "bug") {
+  if (validationPath?.classification !== "bug") {
     throw new Error("Bug validation action requires bug validation path");
   }
 
@@ -608,7 +610,7 @@ async function reproduceBugAndTestFix(pr, validationPath) {
 }
 
 async function testFeatureDirectly(pr, validationPath) {
-  if (validationPath?.kind !== "feature") {
+  if (validationPath?.classification !== "feature") {
     throw new Error("Feature validation action requires feature validation path");
   }
 
@@ -661,7 +663,12 @@ async function collectReviewState(pr) {
     allowFailure: true,
     timeoutMs: 30 * 60_000,
   });
-  const localReviewParsed = tryExtractJson(localReviewRun.stdout);
+  const localReviewStdout = trimTextTail(localReviewRun.stdout, 16_000);
+  const localReviewStderr = trimTextTail(localReviewRun.stderr, 16_000);
+  const localReviewText = trimTextTail(
+    selectLocalCodexReviewText(localReviewRun.stdout, localReviewRun.stderr),
+    16_000,
+  );
 
   const reviewState = {
     baseRef,
@@ -673,9 +680,10 @@ async function collectReviewState(pr) {
     githubIssueComments: Array.isArray(issueComments)
       ? issueComments.map(normalizeGitHubIssueComment)
       : [],
-    localCodexReview: localReviewParsed,
-    localCodexReviewRaw: trimTextTail(localReviewRun.stdout, 16_000),
-    localCodexReviewError: trimTextTail(localReviewRun.stderr, 8_000),
+    localCodexReviewText: localReviewText,
+    localCodexReviewStdout: localReviewStdout,
+    localCodexReviewStderr: localReviewStderr,
+    localCodexReviewAvailable: Boolean(localReviewText),
     localCodexReviewExitCode: localReviewRun.exitCode,
     localCodexReviewTimedOut: localReviewRun.timedOut,
   };
@@ -683,9 +691,9 @@ async function collectReviewState(pr) {
 
   return {
     review_state_path: path.join(pr.flowDir, "review-state.json"),
-    review_status: localReviewParsed?.review_status ?? null,
     local_codex_review_ran: true,
     local_codex_review_exit_code: localReviewRun.exitCode,
+    local_codex_review_available: Boolean(localReviewText),
   };
 }
 
@@ -699,37 +707,16 @@ async function collectCiState(pr) {
   const workflowRuns = await ghApiJson(
     `repos/${pr.repo}/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=20`,
   );
-
-  let workflowApprovalAttempted = false;
-  let workflowApproved = false;
-
   const runs = Array.isArray(workflowRuns?.workflow_runs) ? workflowRuns.workflow_runs : [];
-  for (const run of runs) {
-    if (String(run.status ?? "") === "action_required") {
-      workflowApprovalAttempted = true;
-      const approval = await runCommand(
-        "gh",
-        ["api", "-X", "POST", `repos/${pr.repo}/actions/runs/${run.id}/approve`],
-        { allowFailure: true },
-      );
-      if (approval.exitCode === 0) {
-        workflowApproved = true;
-      }
-    }
-  }
 
   const ciState = {
     statusCheckRollup: Array.isArray(prView?.statusCheckRollup) ? prView.statusCheckRollup : [],
     workflowRuns: runs,
-    workflowApprovalAttempted,
-    workflowApproved,
   };
   await writeJson(path.join(pr.flowDir, "ci-state.json"), ciState);
 
   return {
     ci_state_path: path.join(pr.flowDir, "ci-state.json"),
-    workflow_approval_attempted: workflowApprovalAttempted,
-    workflow_approved: workflowApproved,
   };
 }
 
@@ -859,13 +846,15 @@ function promptExtractIntent(pr) {
     "Inspect the checked-out repo and current diff yourself when needed. Do not ask the runtime to fetch more context.",
     "This is a read-only judgment step. Do not run installs, tests, CI checks, Codex review, or GitHub API commands here.",
     "Extract the plain-language human intent and the underlying problem.",
-    "Return exactly one JSON object with this shape and nothing else:",
-    "{",
-    '  "intent": "plain-language human goal",',
-    '  "problem": "short description of the underlying issue",',
-    '  "confidence": 0.0,',
-    '  "reason": "short explanation"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "intent": "plain-language human goal",',
+      '  "problem": "short description of the underlying issue",',
+      '  "confidence": 0.0,',
+      '  "reason": "short explanation"',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -886,13 +875,15 @@ function promptJudgeSolution(pr) {
     "Route `close_pr` for localized_fix, bad_fix, or unclear.",
     "Route `comment_and_escalate_to_human` for needs_human_call.",
     "Route `bug_or_feature` for good_enough. The conflict gate runs immediately after this step.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "verdict": "good_enough" | "localized_fix" | "bad_fix" | "unclear" | "needs_human_call",',
-    '  "route": "close_pr" | "comment_and_escalate_to_human" | "bug_or_feature",',
-    '  "reason": "short explanation",',
-    '  "evidence": ["brief evidence item"]',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "verdict": "good_enough" | "localized_fix" | "bad_fix" | "unclear" | "needs_human_call",',
+      '  "route": "close_pr" | "comment_and_escalate_to_human" | "bug_or_feature",',
+      '  "reason": "short explanation",',
+      '  "evidence": ["brief evidence item"]',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -906,12 +897,14 @@ function promptBugOrFeature(pr) {
     "Use `bug` if this PR primarily claims to fix a bug, regression, broken behavior, or other issue that should first be reproduced and then proven fixed.",
     "Use `feature` if this PR primarily adds or changes behavior that should be validated directly without first reproducing a prior failure.",
     "If you cannot classify it confidently, route to `comment_and_escalate_to_human`.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "kind": "bug" | "feature" | "unclear",',
-    '  "route": "reproduce_bug_and_test_fix" | "test_feature_directly" | "comment_and_escalate_to_human",',
-    '  "reason": "short explanation"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "classification": "bug" | "feature" | "unclear",',
+      '  "route": "reproduce_bug_and_test_fix" | "test_feature_directly" | "comment_and_escalate_to_human",',
+      '  "reason": "short explanation"',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -929,12 +922,14 @@ function promptJudgeInitialConflicts(pr, outputs) {
     "If the correct move is to keep the current-base refactor and port the PR's behavior into the new structure, that still counts as `clear_resolution_path`.",
     "Route `resolve_initial_conflicts` for `clear_resolution_path`.",
     "Route `comment_and_escalate_to_human` for `needs_human_judgment`.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "conflict_assessment": "clear_resolution_path" | "needs_human_judgment",',
-    '  "route": "resolve_initial_conflicts" | "comment_and_escalate_to_human",',
-    '  "reason": "short explanation"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "conflict_assessment": "clear_resolution_path" | "needs_human_judgment",',
+      '  "route": "resolve_initial_conflicts" | "comment_and_escalate_to_human",',
+      '  "reason": "short explanation"',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -950,13 +945,15 @@ function promptResolveInitialConflicts(pr, outputs) {
     "Resolve the conflict only because you already judged that it has a clear resolution path while preserving the intended PR behavior.",
     "If you cannot resolve the conflicts confidently, do not guess. Route to `comment_and_escalate_to_human` instead.",
     "If you resolve them, finish the merge, run focused checks when feasible, commit the merge result if needed, push the branch yourself, and route to `bug_or_feature`.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "route": "bug_or_feature" | "comment_and_escalate_to_human",',
-    '  "summary": "short explanation",',
-    '  "files_touched": ["path/to/file"],',
-    '  "committed": true | false',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "bug_or_feature" | "comment_and_escalate_to_human",',
+      '  "summary": "short explanation",',
+      '  "files_touched": ["path/to/file"],',
+      '  "committed": true | false',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -972,12 +969,14 @@ function promptJudgeRefactor(pr, outputs) {
     "Route `collect_review_state` for none.",
     "Route `do_superficial_refactor` for superficial.",
     "Route `comment_and_escalate_to_human` for fundamental.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "refactor_needed": "none" | "superficial" | "fundamental",',
-    '  "route": "collect_review_state" | "do_superficial_refactor" | "comment_and_escalate_to_human",',
-    '  "reason": "short explanation"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "refactor_needed": "none" | "superficial" | "fundamental",',
+      '  "route": "collect_review_state" | "do_superficial_refactor" | "comment_and_escalate_to_human",',
+      '  "reason": "short explanation"',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -989,13 +988,15 @@ function promptDoSuperficialRefactor(pr) {
     "Perform only the superficial refactor directly in the checked-out repo.",
     "Keep it minor and maintainability-focused. Do not reframe the problem or turn this into a fundamental rewrite.",
     "If you change files, run focused checks when feasible, rerun the earlier targeted validation before returning, then commit and push the branch yourself.",
-    "Return exactly one JSON object with this shape and nothing else:",
-    "{",
-    '  "route": "collect_review_state",',
-    '  "summary": "short explanation",',
-    '  "files_touched": ["path/to/file"],',
-    '  "committed": true | false',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "collect_review_state",',
+      '  "summary": "short explanation",',
+      '  "files_touched": ["path/to/file"],',
+      '  "committed": true | false',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -1008,26 +1009,30 @@ function promptReviewLoop(pr, outputs) {
     `Target PR: ${prRef(pr)}`,
     `The review mechanics have already been collected by the flow runtime in ${reviewStatePath}.`,
     "Read that local JSON file and the local repo state instead of rerunning `gh api` or `codex review` yourself.",
-    "Use only the normalized GitHub review data and the stored local Codex review result from that file as review evidence.",
+    "Use only the normalized GitHub review data and the stored local Codex review text from that file as review evidence.",
     "Top-level GitHub issue comments count only if they clearly contain Codex-authored review feedback for the current head. Ignore plain handoff or status comments.",
     `Use the local branch ${pr.localBranch}. If you need to push, use remote ${pr.pushRemote} branch ${pr.pushRef}.`,
     "First, inspect the existing GitHub Codex review data already collected for the current PR head.",
-    "Then inspect the fresh local Codex review result that was already run against the refreshed base ref.",
+    "Then inspect the fresh local Codex review text that was already run against the refreshed base ref.",
+    "The local Codex review is plain text, not structured JSON. Read `localCodexReviewText`, and use `localCodexReviewStdout` and `localCodexReviewStderr` only as fallback context if needed.",
     "If valid P0 or P1 issues remain from either source, fix them directly in the repo, run focused checks when feasible, commit and push the branch yourself, and then route back to `collect_review_state` so the flow runtime can rerun the review mechanics.",
     "Do not keep looping just because only P2 or lower findings remain. Treat P2 and lower as non-blocking unless they materially change your judgment about whether the PR is safe to continue.",
     `If you change code in this loop, rerun the earlier targeted validation before returning. Latest validation summary: ${validation?.summary ?? "none"}.`,
-    "If `localCodexReviewExitCode` is non-zero, if `localCodexReviewTimedOut` is true, or if the local Codex review could not be established reliably, route to `comment_and_escalate_to_human` instead of pretending review is clear.",
+    "Treat the local Codex review as established if `localCodexReviewExitCode` is zero, `localCodexReviewTimedOut` is false, and there is substantive review text available.",
+    "Only route to `comment_and_escalate_to_human` if the local Codex review actually failed, timed out, or produced no usable review text at all.",
     "If blocking review findings are cleared, route to `collect_ci_state`.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "route": "collect_review_state" | "collect_ci_state" | "comment_and_escalate_to_human",',
-    '  "review_status": "blocking_findings_remain" | "clear" | "could_not_establish",',
-    '  "summary": "short explanation",',
-    '  "github_codex_reviews_handled": true | false,',
-    '  "local_codex_review_ran": true | false,',
-    '  "blocking_findings": ["brief finding"],',
-    '  "committed": true | false',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "collect_review_state" | "collect_ci_state" | "comment_and_escalate_to_human",',
+      '  "review_status": "blocking_findings_remain" | "clear" | "could_not_establish",',
+      '  "summary": "short explanation",',
+      '  "github_codex_reviews_handled": true | false,',
+      '  "local_codex_review_ran": true | false,',
+      '  "blocking_findings": ["brief finding"],',
+      '  "committed": true | false',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -1040,22 +1045,26 @@ function promptFixCiFailures(pr, outputs) {
     `The CI mechanics have already been collected by the flow runtime in ${ciStatePath}.`,
     "Read that local JSON file and the checked-out repo state instead of rerunning broad CI discovery yourself.",
     `Use the local branch ${pr.localBranch}. If you need to push, use remote ${pr.pushRemote} branch ${pr.pushRef}.`,
-    "If the runtime already approved or attempted to approve workflow runs, treat that as the current ground truth and focus on the remaining CI result.",
+    "If any relevant GitHub Actions workflow run is approval-blocked, approve it immediately yourself with `gh api -X POST repos/{owner}/{repo}/actions/runs/{run_id}/approve` before making any escalation decision.",
+    "Treat a workflow run as approval-blocked when its state clearly shows `action_required`, including cases where that appears in the conclusion rather than the status.",
+    "After you approve a blocked workflow run, route back to `collect_ci_state` so the flow runtime can re-check CI on the updated state.",
     "If related failures remain and you can fix them, fix them directly in the repo, run focused checks when feasible, rerun the earlier targeted validation, commit and push the branch yourself, and then route back to `collect_ci_state` so the flow runtime can re-check CI.",
     `Latest validation summary: ${validation?.summary ?? "none"}.`,
     "If CI is green or the remaining failures are clearly unrelated, route to `check_final_conflicts` so the final conflict gate can run before the human handoff.",
-    "If the only remaining blocker is workflow approval that the runtime could not clear, route to `comment_and_escalate_to_human` and make that the explicit human action needed next.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "route": "collect_ci_state" | "check_final_conflicts" | "comment_and_escalate_to_human",',
-    '  "ci_status": "related_failures_remain" | "green_or_unrelated" | "approval_blocked",',
-    '  "summary": "short explanation",',
-    '  "related_failures": ["brief failure"],',
-    '  "unrelated_failures": ["brief failure"],',
-    '  "workflow_approval_attempted": true | false,',
-    '  "workflow_approved": true | false,',
-    '  "committed": true | false',
-    "}",
+    "Only route to `comment_and_escalate_to_human` for workflow approval if you actually tried to approve the blocked run and could not clear it because of a real permission or platform failure.",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "collect_ci_state" | "check_final_conflicts" | "comment_and_escalate_to_human",',
+      '  "ci_status": "related_failures_remain" | "green_or_unrelated" | "approval_blocked",',
+      '  "summary": "short explanation",',
+      '  "related_failures": ["brief failure"],',
+      '  "unrelated_failures": ["brief failure"],',
+      '  "workflow_approval_attempted": true | false,',
+      '  "workflow_approved": true | false,',
+      '  "committed": true | false',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -1072,12 +1081,14 @@ function promptJudgeFinalConflicts(pr, outputs) {
     "If the correct move is to keep the current-base refactor and port the PR's behavior into the new structure, that still counts as `clear_resolution_path`.",
     "Route `resolve_final_conflicts` for `clear_resolution_path`.",
     "Route `comment_and_escalate_to_human` for `needs_human_judgment`.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "conflict_assessment": "clear_resolution_path" | "needs_human_judgment",',
-    '  "route": "resolve_final_conflicts" | "comment_and_escalate_to_human",',
-    '  "reason": "short explanation"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "conflict_assessment": "clear_resolution_path" | "needs_human_judgment",',
+      '  "route": "resolve_final_conflicts" | "comment_and_escalate_to_human",',
+      '  "reason": "short explanation"',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -1094,13 +1105,15 @@ function promptResolveFinalConflicts(pr, outputs) {
     "If you cannot resolve the conflicts confidently, do not guess. Route to `comment_and_escalate_to_human` instead.",
     `If you resolve them, rerun the earlier targeted validation before returning. Latest validation summary: ${validation?.summary ?? "none"}.`,
     "After resolving and pushing the branch, route back to `collect_ci_state` so the flow runtime can rerun the final CI path.",
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "route": "collect_ci_state" | "comment_and_escalate_to_human",',
-    '  "summary": "short explanation",',
-    '  "files_touched": ["path/to/file"],',
-    '  "committed": true | false',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "collect_ci_state" | "comment_and_escalate_to_human",',
+      '  "summary": "short explanation",',
+      '  "files_touched": ["path/to/file"],',
+      '  "committed": true | false',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -1117,13 +1130,15 @@ function promptCommentAndClose(pr, outputs) {
     "- `Recommendation: 🏁 close PR`",
     "Use the current run state below as the source of truth:",
     JSON.stringify(summary, null, 2),
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "route": "close_pr",',
-    '  "summary": "short explanation",',
-    '  "comment_format_followed": true | false,',
-    '  "comment": "markdown comment to post"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "close_pr",',
+      '  "summary": "short explanation",',
+      '  "comment_format_followed": true | false,',
+      '  "comment": "markdown comment to post"',
+      "}",
+    ]),
   ].join("\n");
 }
 
@@ -1143,15 +1158,26 @@ function promptCommentAndEscalate(pr, outputs) {
     "If the remaining blocker is workflow approval, say that plainly.",
     "Use the current run state below as the source of truth:",
     JSON.stringify(summary, null, 2),
-    "Return exactly one JSON object and nothing else:",
-    "{",
-    '  "route": "escalate_to_human",',
-    '  "summary": "short explanation",',
-    '  "human_decision_needed": "short explanation",',
-    '  "comment_format_followed": true | false,',
-    '  "comment": "markdown comment to post"',
-    "}",
+    ...exactJsonResponse([
+      "Return exactly one JSON object with this shape:",
+      "{",
+      '  "route": "escalate_to_human",',
+      '  "summary": "short explanation",',
+      '  "human_decision_needed": "short explanation",',
+      '  "comment_format_followed": true | false,',
+      '  "comment": "markdown comment to post"',
+      "}",
+    ]),
   ].join("\n");
+}
+
+function exactJsonResponse(shapeLines: string[]) {
+  return [
+    "Return exactly one JSON object and nothing else.",
+    "The first character of your response must be `{` and the last character must be `}`.",
+    "Do not include commentary, progress updates, markdown fences, or any text before or after the JSON.",
+    ...shapeLines,
+  ];
 }
 
 function loadPullRequestInput(input) {
@@ -1442,111 +1468,4 @@ async function runCommand(command, args, options = {}) {
     signal: exit.signal,
     timedOut,
   };
-}
-
-function extractJson(text) {
-  const trimmed = String(text ?? "").trim();
-  if (!trimmed) {
-    throw new Error("Expected JSON output, got empty text");
-  }
-
-  const direct = tryParse(trimmed);
-  if (direct.ok) {
-    return direct.value;
-  }
-
-  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fencedMatch) {
-    const fenced = tryParse(fencedMatch[1].trim());
-    if (fenced.ok) {
-      return fenced.value;
-    }
-  }
-
-  for (const candidate of extractBalancedJsonCandidates(trimmed)) {
-    const parsed = tryParse(candidate);
-    if (parsed.ok) {
-      return parsed.value;
-    }
-  }
-
-  throw new Error(`Could not parse JSON from assistant output:\n${trimmed}`);
-}
-
-function tryExtractJson(text) {
-  try {
-    return extractJson(text);
-  } catch {
-    return null;
-  }
-}
-
-function tryParse(text) {
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-function extractBalancedJsonCandidates(text) {
-  const candidates = [];
-  const starts = new Set(["{", "["]);
-  for (let i = 0; i < text.length; i += 1) {
-    if (!starts.has(text[i] ?? "")) {
-      continue;
-    }
-
-    const result = scanBalanced(text, i);
-    if (result) {
-      candidates.push(result);
-    }
-  }
-
-  return candidates;
-}
-
-function scanBalanced(text, startIndex) {
-  const stack = [];
-  let inString = false;
-  let escaped = false;
-
-  for (let i = startIndex; i < text.length; i += 1) {
-    const char = text[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (char === "{" || char === "[") {
-      stack.push(char);
-      continue;
-    }
-
-    if (char === "}" || char === "]") {
-      const last = stack.at(-1);
-      if ((last === "{" && char !== "}") || (last === "[" && char !== "]")) {
-        return null;
-      }
-
-      stack.pop();
-      if (stack.length === 0) {
-        return text.slice(startIndex, i + 1);
-      }
-    }
-  }
-
-  return null;
 }
