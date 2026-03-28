@@ -1418,8 +1418,38 @@ async function exists(filename) {
   }
 }
 
+function shellCandidates() {
+  return [
+    {
+      command: "bash",
+      args: ["-lc"],
+    },
+    {
+      command: "sh",
+      args: ["-c"],
+    },
+  ];
+}
+
+function isMissingExecutableError(error) {
+  return error != null && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
+
 async function runShellLine(command, options = {}) {
-  return await runCommand("zsh", ["-lc", command], options);
+  let lastError;
+
+  for (const shell of shellCandidates()) {
+    try {
+      return await runCommand(shell.command, [...shell.args, command], options);
+    } catch (error) {
+      if (!isMissingExecutableError(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("No supported shell was available for validation commands");
 }
 
 async function runCommand(command, args, options = {}) {

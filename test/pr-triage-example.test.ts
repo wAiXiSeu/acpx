@@ -77,3 +77,13 @@ test("maintenance PRs stay on the feature path without adding a new flow node", 
     assert.doesNotMatch(source, /supportsStandardChecksValidation/);
   });
 });
+
+test("validation shell helper does not hardcode zsh and falls back to bash/sh", () => {
+  const sourcePath = path.join(process.cwd(), "examples/flows/pr-triage/pr-triage.flow.ts");
+
+  return fs.readFile(sourcePath, "utf8").then((source) => {
+    assert.doesNotMatch(source, /runCommand\("zsh", \["-lc", command\], options\)/);
+    assert.match(source, /command: "bash"/);
+    assert.match(source, /command: "sh"/);
+  });
+});
