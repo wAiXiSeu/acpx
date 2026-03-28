@@ -168,6 +168,10 @@ Harness documentation synchronization policy:
   of the same commit when possible.
 - Group changelog updates with the PR that introduces the user-facing change
   instead of batching them later.
+- When referring to pull requests in comments, notes, or final reports, use a
+  full URL or a Markdown link. In lists, a short Markdown link label such as
+  [`#123`](https://github.com/openclaw/acpx/pull/123) is preferred over bare PR
+  numbers.
 
 ## Fundamental acpx Calls
 
