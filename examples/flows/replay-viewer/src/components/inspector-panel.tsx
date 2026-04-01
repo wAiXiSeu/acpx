@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { SelectedAttemptView, SessionListItemView } from "../lib/view-model";
 import { AttemptTab } from "./inspector/attempt-tab";
 import { EventsTab } from "./inspector/events-tab";
@@ -8,6 +9,7 @@ type InspectorPanelProps = {
   sessionItems: SessionListItemView[];
   activeSessionId: string | null;
   sessionRevealProgress: number | null;
+  liveStreaming: boolean;
   activeTab: "attempt" | "session" | "events";
   onTabChange(tab: "attempt" | "session" | "events"): void;
   onSessionChange(sessionId: string): void;
@@ -18,10 +20,13 @@ export function InspectorPanel({
   sessionItems,
   activeSessionId,
   sessionRevealProgress,
+  liveStreaming,
   activeTab,
   onTabChange,
   onSessionChange,
 }: InspectorPanelProps) {
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
   if (!selectedAttempt) {
     return (
       <aside className="inspector">
@@ -40,13 +45,15 @@ export function InspectorPanel({
         <TabButton tab="events" activeTab={activeTab} onTabChange={onTabChange} />
       </div>
 
-      <div className="inspector__body">
+      <div ref={bodyRef} className="inspector__body">
         {activeTab === "session" ? (
           <SessionTab
+            scrollContainerRef={bodyRef}
             selectedAttempt={selectedAttempt}
             sessionItems={sessionItems}
             activeSessionId={activeSessionId}
             sessionRevealProgress={sessionRevealProgress}
+            liveStreaming={liveStreaming}
             onSessionChange={onSessionChange}
           />
         ) : null}

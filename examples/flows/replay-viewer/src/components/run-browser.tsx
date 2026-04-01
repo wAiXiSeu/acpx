@@ -5,12 +5,8 @@ type RunBrowserProps = {
   activeRunId?: string;
   collapsed: boolean;
   loading: boolean;
-  directoryPickerSupported: boolean;
   onToggleCollapsed: () => void;
-  onRefresh: () => void;
-  onLoadSample: () => void;
   onLoadRun: (run: RunBundleSummary) => void;
-  onOpenLocal: () => void;
 };
 
 export function RunBrowser({
@@ -18,12 +14,8 @@ export function RunBrowser({
   activeRunId,
   collapsed,
   loading,
-  directoryPickerSupported,
   onToggleCollapsed,
-  onRefresh,
-  onLoadSample,
   onLoadRun,
-  onOpenLocal,
 }: RunBrowserProps) {
   return (
     <aside className={`run-browser${collapsed ? " run-browser--collapsed" : ""}`}>
@@ -51,7 +43,7 @@ export function RunBrowser({
               <button
                 key={run.runId}
                 type="button"
-                className={`run-list-item${active ? " run-list-item--active" : ""}`}
+                className={`run-list-item run-list-item--status-${run.status}${active ? " run-list-item--active" : ""}`}
                 onClick={() => onLoadRun(run)}
                 aria-label={`${displayName} ${run.runId} ${run.status}`}
                 title={`${displayName} • ${run.runId}`}
@@ -81,29 +73,10 @@ export function RunBrowser({
         </div>
       ) : (
         <div className="run-browser__empty">
-          <strong>No recent run bundles found.</strong>
-          <span>Run a flow first, or fall back to the bundled sample.</span>
+          <strong>{loading ? "Watching for recent runs…" : "No recent runs yet."}</strong>
+          <span>Start a flow and it will appear here automatically.</span>
         </div>
       )}
-
-      {!collapsed ? (
-        <div className="run-browser__footer">
-          <button type="button" className="ghost-button" onClick={onRefresh} disabled={loading}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-          <button type="button" className="ghost-button" onClick={onLoadSample}>
-            Sample
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={onOpenLocal}
-            disabled={!directoryPickerSupported}
-          >
-            Open bundle
-          </button>
-        </div>
-      ) : null}
     </aside>
   );
 }

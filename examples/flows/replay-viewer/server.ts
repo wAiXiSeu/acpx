@@ -1,189 +1,228 @@
-import fs from "node:fs/promises";
-import http from "node:http";
+import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createServer as createViteServer } from "vite";
-import { defaultRunsDir, listRunBundles, resolveRunBundleFilePath } from "./server/run-bundles.js";
+import { pathToFileURL } from "node:url";
+import { defaultRunsDir } from "./server/run-bundles.js";
+import {
+  createReplayViewerServer,
+  fetchViewerServerHealth,
+  requestViewerServerShutdown,
+} from "./server/viewer-server.js";
 
-const HOST = "127.0.0.1";
-const PORT = 4173;
-const SERVER_ID = "acpx-flow-replay-viewer";
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_PORT = 4173;
 
-async function main(): Promise<void> {
-  const baseUrl = `http://${HOST}:${PORT}`;
+export type ReplayViewerCliCommand = "start" | "status" | "stop";
 
-  if (await isServerAlreadyRunning(baseUrl)) {
-    process.stdout.write(`Viewer already running at ${baseUrl}/\n`);
-    return;
+export type ReplayViewerCliOptions = {
+  command: ReplayViewerCliCommand;
+  host: string;
+  port: number;
+  runsDir: string;
+  open: boolean;
+};
+
+export function parseReplayViewerCliArgs(argv: readonly string[]): ReplayViewerCliOptions {
+  let command: ReplayViewerCliCommand = "start";
+  let host = DEFAULT_HOST;
+  let port = DEFAULT_PORT;
+  let runsDir = defaultRunsDir();
+  let open = false;
+
+  const args = [...argv];
+  const first = args[0];
+  if (first === "start" || first === "status" || first === "stop") {
+    command = first;
+    args.shift();
   }
 
-  const viewerDir = path.dirname(fileURLToPath(import.meta.url));
-  const vite = await createViteServer({
-    configFile: path.join(viewerDir, "vite.config.ts"),
-    appType: "spa",
-    server: {
-      middlewareMode: true,
-      hmr: false,
-      host: HOST,
-      port: PORT,
-      strictPort: true,
-    },
-  });
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    if (!current) {
+      continue;
+    }
+    if (current === "--open") {
+      open = true;
+      continue;
+    }
+    if (current === "--host") {
+      host = requireArgValue(args, ++index, "--host");
+      continue;
+    }
+    if (current.startsWith("--host=")) {
+      host = current.slice("--host=".length);
+      continue;
+    }
+    if (current === "--port") {
+      port = parsePort(requireArgValue(args, ++index, "--port"));
+      continue;
+    }
+    if (current.startsWith("--port=")) {
+      port = parsePort(current.slice("--port=".length));
+      continue;
+    }
+    if (current === "--runs-dir") {
+      runsDir = requireArgValue(args, ++index, "--runs-dir");
+      continue;
+    }
+    if (current.startsWith("--runs-dir=")) {
+      runsDir = current.slice("--runs-dir=".length);
+      continue;
+    }
+    throw new Error(`Unknown replay viewer argument: ${current}`);
+  }
 
-  const server = http.createServer(async (request, response) => {
-    if (await handleApiRequest(request, response)) {
+  return {
+    command,
+    host,
+    port,
+    runsDir,
+    open,
+  };
+}
+
+export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const options = parseReplayViewerCliArgs(argv);
+  const baseUrl = `http://${options.host}:${options.port}`;
+  const requestedRunsDir = normalizeRunsDirPath(options.runsDir);
+
+  switch (options.command) {
+    case "status": {
+      const health = await fetchViewerServerHealth(baseUrl);
+      if (!health) {
+        process.stdout.write(`Viewer is not running at ${baseUrl}/\n`);
+        return;
+      }
+      process.stdout.write(`Viewer is running at ${baseUrl}/\n`);
+      process.stdout.write(`Runs dir: ${health.runsDir}\n`);
       return;
     }
-
-    vite.middlewares(request, response, (error: unknown) => {
-      if (error) {
-        response.statusCode = 500;
-        response.setHeader("content-type", "application/json; charset=utf-8");
-        response.end(
-          JSON.stringify({
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
+    case "stop": {
+      const stopped = await requestViewerServerShutdown(baseUrl);
+      process.stdout.write(
+        stopped ? `Stopped viewer at ${baseUrl}/\n` : `Viewer is not running at ${baseUrl}/\n`,
+      );
+      return;
+    }
+    case "start": {
+      const health = await fetchViewerServerHealth(baseUrl);
+      if (health) {
+        const runningRunsDir = normalizeRunsDirPath(health.runsDir);
+        if (runningRunsDir !== requestedRunsDir) {
+          throw new Error(
+            `Viewer is already running at ${baseUrl}/ for ${health.runsDir}, not ${options.runsDir}`,
+          );
+        }
+        process.stdout.write(`Reused existing viewer at ${baseUrl}/\n`);
+        process.stdout.write(`Runs dir: ${health.runsDir}\n`);
+        if (options.open) {
+          await openViewerUrl(baseUrl);
+        }
         return;
       }
 
-      response.statusCode = 404;
-      response.end("Not found");
-    });
-  });
+      const viewerServer = await createReplayViewerServer({
+        host: options.host,
+        port: options.port,
+        runsDir: options.runsDir,
+      });
 
-  server.on("error", async (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRINUSE" && (await isServerAlreadyRunning(baseUrl))) {
-      process.stdout.write(`Viewer already running at ${baseUrl}/\n`);
-      process.exit(0);
+      process.stdout.write(`Started viewer at ${viewerServer.baseUrl}/\n`);
+      process.stdout.write(`Runs dir: ${options.runsDir}\n`);
+
+      if (options.open) {
+        await openViewerUrl(viewerServer.baseUrl);
+      }
+
+      const close = async (): Promise<void> => {
+        await viewerServer.close();
+      };
+
+      process.on("SIGINT", () => {
+        void close().finally(() => process.exit(0));
+      });
+      process.on("SIGTERM", () => {
+        void close().finally(() => process.exit(0));
+      });
       return;
     }
-    throw error;
-  });
+  }
+}
+
+async function openViewerUrl(url: string): Promise<void> {
+  const { command, args } = resolveOpenCommand(url);
 
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(PORT, HOST, () => {
-      server.off("error", reject);
-      resolve();
+    const child = spawn(command, args, {
+      stdio: "ignore",
     });
-  });
-
-  process.stdout.write(`Viewer running at ${baseUrl}/\n`);
-
-  const close = async (): Promise<void> => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) {
         resolve();
-      });
-    }).finally(async () => {
-      await vite.close();
+        return;
+      }
+      reject(new Error(`viewer open command exited with code ${code ?? "null"}`));
     });
-  };
-
-  process.on("SIGINT", () => {
-    void close().finally(() => process.exit(0));
-  });
-  process.on("SIGTERM", () => {
-    void close().finally(() => process.exit(0));
   });
 }
 
-async function handleApiRequest(
-  request: http.IncomingMessage,
-  response: http.ServerResponse,
-): Promise<boolean> {
-  const url = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
-
-  if (url.pathname === "/api/health") {
-    writeJson(response, 200, {
-      service: SERVER_ID,
-      runsDir: defaultRunsDir(),
-    });
-    return true;
+function resolveOpenCommand(url: string): {
+  command: string;
+  args: string[];
+} {
+  switch (process.platform) {
+    case "darwin":
+      return { command: "open", args: [url] };
+    case "win32":
+      return { command: "cmd", args: ["/c", "start", "", url] };
+    default:
+      return { command: "xdg-open", args: [url] };
   }
-
-  if (url.pathname === "/api/runs") {
-    const runs = await listRunBundles();
-    writeJson(response, 200, {
-      runs,
-    });
-    return true;
-  }
-
-  const runFileMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/files\/(.+)$/);
-  if (runFileMatch) {
-    const [, encodedRunId, encodedRelativePath] = runFileMatch;
-    const runId = decodeURIComponent(encodedRunId ?? "");
-    const relativePath = encodedRelativePath
-      ?.split("/")
-      .map((segment) => decodeURIComponent(segment))
-      .join("/");
-
-    try {
-      const filePath = resolveRunBundleFilePath(defaultRunsDir(), runId, relativePath ?? "");
-      const payload = await fs.readFile(filePath);
-      response.statusCode = 200;
-      response.setHeader("content-type", contentTypeFor(filePath));
-      response.end(payload);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const code =
-        error instanceof Error && /outside run bundle|not allowed|required/.test(error.message)
-          ? 400
-          : 404;
-      writeJson(response, code, { error: message });
-    }
-    return true;
-  }
-
-  return false;
 }
 
-function writeJson(response: http.ServerResponse, statusCode: number, value: unknown): void {
-  response.statusCode = statusCode;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(value));
+function normalizeRunsDirPath(runsDir: string): string {
+  try {
+    return realpathSync(runsDir);
+  } catch {
+    return path.resolve(runsDir);
+  }
 }
 
-function contentTypeFor(filePath: string): string {
-  if (filePath.endsWith(".json")) {
-    return "application/json; charset=utf-8";
+function requireArgValue(args: readonly string[], index: number, flag: string): string {
+  const value = args[index]?.trim();
+  if (!value) {
+    throw new Error(`${flag} requires a value`);
   }
-  if (filePath.endsWith(".ndjson")) {
-    return "application/x-ndjson; charset=utf-8";
-  }
-  if (filePath.endsWith(".txt")) {
-    return "text/plain; charset=utf-8";
-  }
-  return "application/octet-stream";
+  return value;
 }
 
-async function isServerAlreadyRunning(baseUrl: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 500);
+function parsePort(rawPort: string): number {
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid replay viewer port: ${rawPort}`);
+  }
+  return port;
+}
+
+function isReplayViewerEntrypoint(argv: readonly string[]): boolean {
+  const entry = argv[1];
+  if (!entry) {
+    return false;
+  }
 
   try {
-    const response = await fetch(`${baseUrl}/api/health`, { signal: controller.signal });
-    if (!response.ok) {
-      return false;
-    }
-    const payload = (await response.json()) as { service?: string };
-    return payload.service === SERVER_ID;
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
   } catch {
     return false;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
-void main().catch((error) => {
-  process.stderr.write(
-    `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-  );
-  process.exit(1);
-});
+if (isReplayViewerEntrypoint(process.argv)) {
+  void main().catch((error) => {
+    process.stderr.write(
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+    );
+    process.exit(1);
+  });
+}

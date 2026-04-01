@@ -30,6 +30,7 @@ export type ViewerNodeData = {
   branchLabels: string[];
   isRunOutcomeNode: boolean;
   runOutcomeLabel?: string;
+  runOutcomeAccent?: RunOutcomeView["accent"];
   playbackProgress?: number;
 };
 
@@ -78,6 +79,45 @@ export type PlaybackPreview = {
   totalDurationMs: number;
 };
 
+export type ConversationToolUseView = {
+  id: string;
+  name: string;
+  summary: string;
+  raw: unknown;
+};
+
+export type ConversationToolResultView = {
+  id: string;
+  toolName: string;
+  status: string;
+  preview: string;
+  isError: boolean;
+  raw: unknown;
+};
+
+export type ConversationHiddenPayloadView = {
+  label: string;
+  raw: unknown;
+};
+
+export type ConversationMessagePart =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "tool_use";
+      toolUse: ConversationToolUseView;
+    }
+  | {
+      type: "tool_result";
+      toolResult: ConversationToolResultView;
+    }
+  | {
+      type: "hidden_payload";
+      payload: ConversationHiddenPayloadView;
+    };
+
 export type SelectedAttemptView = {
   step: FlowStepRecord;
   sessionSourceStep: FlowStepRecord | null;
@@ -90,24 +130,10 @@ export type SelectedAttemptView = {
     title: string;
     highlighted: boolean;
     textBlocks: string[];
-    toolUses: Array<{
-      id: string;
-      name: string;
-      summary: string;
-      raw: unknown;
-    }>;
-    toolResults: Array<{
-      id: string;
-      toolName: string;
-      status: string;
-      preview: string;
-      isError: boolean;
-      raw: unknown;
-    }>;
-    hiddenPayloads: Array<{
-      label: string;
-      raw: unknown;
-    }>;
+    toolUses: ConversationToolUseView[];
+    toolResults: ConversationToolResultView[];
+    hiddenPayloads: ConversationHiddenPayloadView[];
+    parts: ConversationMessagePart[];
   }>;
   rawEventSlice: FlowBundledSessionEvent[];
   traceEvents: FlowTraceEvent[];

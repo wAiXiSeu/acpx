@@ -4,6 +4,8 @@ This example app visualizes one saved flow run bundle at a time.
 
 For the viewer semantics and UX/layout rules, see
 [docs/2026-03-27-flow-replay-viewer.md](../../../docs/2026-03-27-flow-replay-viewer.md).
+For the live viewer transport and state-sync model, see
+[docs/2026-03-31-flow-replay-live-transport.md](../../../docs/2026-03-31-flow-replay-live-transport.md).
 
 It is separate from the `acpx` CLI surface on purpose:
 
@@ -22,7 +24,7 @@ The viewer uses:
 From the repo root:
 
 ```bash
-pnpm run viewer:preview
+pnpm viewer
 ```
 
 Then open [http://127.0.0.1:4173](http://127.0.0.1:4173).
@@ -31,15 +33,27 @@ The local viewer server always uses that fixed port. If another replay viewer is
 already running there, the command reuses it instead of bouncing to a random
 new port.
 
-The app ships with a bundled ACP-backed sample run so it is immediately usable,
-but the main path is the built-in **Recent runs** list sourced from:
+Useful helper commands:
+
+```bash
+pnpm viewer:open
+pnpm viewer:status
+pnpm viewer:stop
+```
+
+The main path is the built-in **Recent runs** list sourced from:
 
 ```text
 ~/.acpx/flows/runs/<run-id>/
 ```
 
-You can still use **Open local run bundle** as a fallback to inspect an arbitrary
-bundle outside that default directory.
+If the viewer starts before any runs exist, it stays empty and waits for the
+first real run instead of falling back to a demo bundle. New runs appear in the
+left sidebar automatically, and the first recent run opens on its own.
+
+When a recent run is still active, the sidebar and the selected run view update
+live over the viewer WebSocket transport. The viewer keeps the accumulated
+history locally, so you can still rewind while new steps continue to arrive.
 
 ## What it shows
 
@@ -53,6 +67,7 @@ on that graph rather than replacing it with an execution-only path.
 
 ## Included sample
 
-The bundled sample under `public/sample-run/` comes from a real run of
-`examples/flows/two-turn.flow.ts` against the repo's mock ACP agent, with the
-machine-specific paths sanitized for readability.
+The bundled sample under `public/sample-run/` still exists for development and
+test fixtures. It comes from a real run of `examples/flows/two-turn.flow.ts`
+against the repo's mock ACP agent, with the machine-specific paths sanitized
+for readability.

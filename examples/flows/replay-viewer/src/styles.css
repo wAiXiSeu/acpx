@@ -173,6 +173,9 @@ code {
 }
 
 .run-list-item {
+  --run-status-color: var(--muted);
+  --run-status-border: rgba(133, 146, 166, 0.24);
+  --run-status-tint: rgba(133, 146, 166, 0.12);
   min-height: 34px;
   display: flex;
   align-items: center;
@@ -192,13 +195,39 @@ code {
 }
 
 .run-list-item:hover {
-  border-color: rgba(62, 166, 198, 0.24);
+  border-color: var(--run-status-border);
   background: var(--panel-hover);
 }
 
 .run-list-item--active {
-  border-color: rgba(62, 166, 198, 0.44);
-  background: var(--panel-selected);
+  border-color: var(--run-status-border);
+  background: var(--run-status-tint);
+}
+
+.run-list-item--status-completed {
+  --run-status-color: var(--success);
+  --run-status-border: rgba(88, 187, 129, 0.4);
+  --run-status-tint: rgba(88, 187, 129, 0.14);
+}
+
+.run-list-item--status-running,
+.run-list-item--status-waiting {
+  --run-status-color: var(--accent);
+  --run-status-border: rgba(62, 166, 198, 0.4);
+  --run-status-tint: rgba(62, 166, 198, 0.14);
+}
+
+.run-list-item--status-failed,
+.run-list-item--status-timed_out {
+  --run-status-color: var(--danger);
+  --run-status-border: rgba(216, 107, 107, 0.42);
+  --run-status-tint: rgba(216, 107, 107, 0.14);
+}
+
+.run-list-item--status-cancelled {
+  --run-status-color: var(--warning);
+  --run-status-border: rgba(212, 155, 69, 0.42);
+  --run-status-tint: rgba(212, 155, 69, 0.14);
 }
 
 .run-list-item__line {
@@ -233,24 +262,7 @@ code {
   height: 8px;
   flex: 0 0 auto;
   border-radius: 999px;
-}
-
-.run-list-item__status-dot--completed {
-  background: var(--success);
-}
-
-.run-list-item__status-dot--running,
-.run-list-item__status-dot--waiting {
-  background: var(--accent);
-}
-
-.run-list-item__status-dot--failed,
-.run-list-item__status-dot--timed_out {
-  background: var(--danger);
-}
-
-.run-list-item__status-dot--cancelled {
-  background: var(--warning);
+  background: var(--run-status-color);
 }
 
 .run-browser--collapsed .run-browser__header {
@@ -680,6 +692,7 @@ code {
 }
 
 .flow-node-card {
+  --flow-node-selected-ring: rgba(62, 166, 198, 0.24);
   position: relative;
   overflow: hidden;
   width: 264px;
@@ -742,25 +755,29 @@ code {
 }
 
 .flow-node-card--completed {
+  --flow-node-selected-ring: rgba(88, 187, 129, 0.24);
   border-top: 3px solid var(--node-completed);
 }
 
 .flow-node-card--failed {
+  --flow-node-selected-ring: rgba(216, 107, 107, 0.24);
   border-top: 3px solid var(--node-failed);
 }
 
 .flow-node-card--timed_out {
+  --flow-node-selected-ring: rgba(212, 155, 69, 0.24);
   border-top: 3px solid var(--node-timed_out);
 }
 
 .flow-node-card--cancelled {
+  --flow-node-selected-ring: rgba(159, 132, 224, 0.24);
   border-top: 3px solid var(--node-cancelled);
 }
 
 .flow-node-card--selected {
   box-shadow:
     0 18px 38px rgba(0, 0, 0, 0.3),
-    0 0 0 2px rgba(62, 166, 198, 0.24);
+    0 0 0 2px var(--flow-node-selected-ring);
 }
 
 .flow-node-card__eyebrow,
@@ -863,6 +880,26 @@ code {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.flow-node-card__outcome--ok {
+  background: rgba(88, 187, 129, 0.14);
+  color: #d7f6e3;
+}
+
+.flow-node-card__outcome--active {
+  background: rgba(62, 166, 198, 0.14);
+  color: var(--ink);
+}
+
+.flow-node-card__outcome--failed {
+  background: rgba(216, 107, 107, 0.16);
+  color: #ffd7d7;
+}
+
+.flow-node-card__outcome--timed_out {
+  background: rgba(212, 155, 69, 0.16);
+  color: #f6ddb1;
 }
 
 .flow-node-card__handle {
@@ -1140,11 +1177,6 @@ code {
   font-size: 0.76rem;
 }
 
-.conversation__tool-list {
-  display: grid;
-  gap: 8px;
-}
-
 .conversation__tool-card {
   display: grid;
   gap: 6px;
@@ -1162,15 +1194,124 @@ code {
   overflow-wrap: anywhere;
 }
 
-.conversation__nested-details {
-  border-top: 1px solid rgba(133, 146, 166, 0.12);
-  padding-top: 6px;
+.conversation__tool-event {
+  border-left: 2px solid rgba(133, 146, 166, 0.18);
+  padding-left: 10px;
 }
 
-.conversation__nested-details summary {
+.conversation__tool-event--call {
+  border-left-color: rgba(62, 166, 198, 0.32);
+}
+
+.conversation__tool-event--completed {
+  border-left-color: rgba(88, 187, 129, 0.34);
+}
+
+.conversation__tool-event--running {
+  border-left-color: rgba(62, 166, 198, 0.34);
+}
+
+.conversation__tool-event--error {
+  border-left-color: rgba(216, 107, 107, 0.38);
+}
+
+.conversation__tool-event summary {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 6px 20px 6px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.conversation__tool-event summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.conversation__tool-event summary:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.conversation__tool-event summary::after {
+  content: "▾";
+  position: absolute;
+  top: 8px;
+  right: 0;
+  color: var(--ink-faint);
+  font-size: 0.68rem;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.conversation__tool-event[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.conversation__tool-title {
+  color: var(--ink);
+  font-family: "Manrope", "Inter", sans-serif;
+  font-size: 0.82rem;
+  font-weight: 760;
+  line-height: 1.22;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.conversation__tool-preview {
   color: var(--ink-soft);
+  font-size: 0.73rem;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.conversation__tool-preview--call {
+  font-family: "IBM Plex Mono", "SFMono-Regular", "Cascadia Code", monospace;
+  font-size: 0.69rem;
+}
+
+.conversation__tool-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 0 0;
+  border-top: 1px solid rgba(133, 146, 166, 0.12);
+}
+
+.conversation__tool-section {
+  display: grid;
+  gap: 6px;
+}
+
+.conversation__tool-section-label {
+  color: var(--ink-faint);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.conversation__tool-section-copy {
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation__tool-section-copy--mono {
+  font-family: "IBM Plex Mono", "SFMono-Regular", "Cascadia Code", monospace;
   font-size: 0.72rem;
-  font-weight: 700;
 }
 
 .event-card {

@@ -134,19 +134,13 @@ export function revealConversationSlice(
     const localProgress = clamp01(
       (clampedProgress - start) / Math.max(end - start, Number.EPSILON),
     );
-    const partialTextBlocks =
+    const revealedParts =
       charCount > 0
-        ? revealTextBlocks(message.textBlocks, Math.max(1, Math.round(charCount * localProgress)))
+        ? revealMessageParts(message.parts, Math.max(1, Math.round(charCount * localProgress)))
         : [];
 
-    if (partialTextBlocks.length > 0 || (message.textBlocks.length === 0 && localProgress >= 1)) {
-      revealed.push({
-        ...message,
-        textBlocks: partialTextBlocks,
-        toolUses: [],
-        toolResults: [],
-        hiddenPayloads: [],
-      });
+    if (revealedParts.length > 0 || (message.parts.length === 0 && localProgress >= 1)) {
+      revealed.push(buildPartialMessage(message, revealedParts));
     }
     break;
   }
@@ -231,6 +225,7 @@ function createSessionSlice(
       toolUses: contentView.toolUses,
       toolResults: contentView.toolResults,
       hiddenPayloads: contentView.hiddenPayloads,
+      parts: contentView.parts,
     };
   });
 }
@@ -248,26 +243,73 @@ function messageRevealWeight(message: SelectedAttemptView["sessionSlice"][number
   if (message.role !== "agent") {
     return 0;
   }
-  return message.textBlocks.reduce((sum, block) => sum + block.length, 0);
+  return message.parts.reduce((sum, part) => sum + partRevealWeight(part), 0);
 }
 
-function revealTextBlocks(textBlocks: string[], charBudget: number): string[] {
-  const revealed: string[] = [];
-  let remainingChars = Math.max(0, charBudget);
+function revealMessageParts(
+  parts: SelectedAttemptView["sessionSlice"][number]["parts"],
+  budget: number,
+): SelectedAttemptView["sessionSlice"][number]["parts"] {
+  const revealed: SelectedAttemptView["sessionSlice"][number]["parts"] = [];
+  let remaining = Math.max(0, budget);
 
-  for (const block of textBlocks) {
-    if (remainingChars <= 0) {
+  for (const part of parts) {
+    if (remaining <= 0) {
       break;
     }
-    const take = Math.min(block.length, remainingChars);
-    revealed.push(block.slice(0, take));
-    remainingChars -= take;
-    if (take < block.length) {
+
+    if (part.type === "text") {
+      const take = Math.min(part.text.length, remaining);
+      if (take > 0) {
+        revealed.push({ type: "text", text: part.text.slice(0, take) });
+        remaining -= take;
+      }
+      if (take < part.text.length) {
+        break;
+      }
+      continue;
+    }
+
+    const weight = partRevealWeight(part);
+    if (remaining < weight) {
       break;
     }
+    revealed.push(part);
+    remaining -= weight;
   }
 
-  return revealed.filter((value) => value.length > 0);
+  return revealed;
+}
+
+function buildPartialMessage(
+  message: SelectedAttemptView["sessionSlice"][number],
+  parts: SelectedAttemptView["sessionSlice"][number]["parts"],
+): SelectedAttemptView["sessionSlice"][number] {
+  return {
+    ...message,
+    textBlocks: parts.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+    toolUses: parts.flatMap((part) => (part.type === "tool_use" ? [part.toolUse] : [])),
+    toolResults: parts.flatMap((part) => (part.type === "tool_result" ? [part.toolResult] : [])),
+    hiddenPayloads: parts.flatMap((part) => (part.type === "hidden_payload" ? [part.payload] : [])),
+    parts,
+  };
+}
+
+function partRevealWeight(
+  part: SelectedAttemptView["sessionSlice"][number]["parts"][number],
+): number {
+  switch (part.type) {
+    case "text":
+      return Math.max(part.text.length, 1);
+    case "tool_use":
+      return Math.max(part.toolUse.summary.length, 16);
+    case "tool_result":
+      return Math.max(part.toolResult.preview.length, 16);
+    case "hidden_payload":
+      return Math.max(part.payload.label.length, 12);
+    default:
+      return 1;
+  }
 }
 
 function createRawEventSlice(
@@ -298,14 +340,16 @@ function describeMessage(
   role: "user" | "agent" | "unknown",
 ): Pick<
   SelectedAttemptView["sessionSlice"][number],
-  "textBlocks" | "toolUses" | "toolResults" | "hiddenPayloads"
+  "textBlocks" | "toolUses" | "toolResults" | "hiddenPayloads" | "parts"
 > {
   if (!message || typeof message !== "object") {
+    const text = String(message ?? "");
     return {
-      textBlocks: [String(message ?? "")].filter(Boolean),
+      textBlocks: [text].filter(Boolean),
       toolUses: [],
       toolResults: [],
       hiddenPayloads: [],
+      parts: text ? [{ type: "text", text }] : [],
     };
   }
 
@@ -331,6 +375,7 @@ function describeMessage(
     toolUses: [],
     toolResults: [],
     hiddenPayloads: [{ label: "Raw message", raw: message }],
+    parts: [{ type: "hidden_payload", payload: { label: "Raw message", raw: message } }],
   };
 }
 
@@ -339,11 +384,12 @@ function describeStructuredMessage(
   toolResults: unknown,
 ): Pick<
   SelectedAttemptView["sessionSlice"][number],
-  "textBlocks" | "toolUses" | "toolResults" | "hiddenPayloads"
+  "textBlocks" | "toolUses" | "toolResults" | "hiddenPayloads" | "parts"
 > {
   const textBlocks: string[] = [];
   const toolUses: SelectedAttemptView["sessionSlice"][number]["toolUses"] = [];
   const hiddenPayloads: SelectedAttemptView["sessionSlice"][number]["hiddenPayloads"] = [];
+  const contentParts: SelectedAttemptView["sessionSlice"][number]["parts"] = [];
 
   if (Array.isArray(content)) {
     for (const [index, part] of content.entries()) {
@@ -351,6 +397,7 @@ function describeStructuredMessage(
         const text = String(part ?? "").trim();
         if (text) {
           textBlocks.push(text);
+          contentParts.push({ type: "text", text });
         }
         continue;
       }
@@ -359,6 +406,7 @@ function describeStructuredMessage(
         const text = (part as { Text: string }).Text.trim();
         if (text) {
           textBlocks.push(text);
+          contentParts.push({ type: "text", text });
         }
         continue;
       }
@@ -366,33 +414,43 @@ function describeStructuredMessage(
       if ("ToolUse" in part) {
         const toolUse = (part as { ToolUse?: Record<string, unknown> }).ToolUse;
         if (toolUse && typeof toolUse === "object") {
-          toolUses.push({
+          const toolUseView = {
             id: String(toolUse.id ?? `tool-use-${index}`),
             name: typeof toolUse.name === "string" ? toolUse.name : "Tool call",
             summary: summarizeToolUse(toolUse),
             raw: toolUse,
-          });
+          };
+          toolUses.push(toolUseView);
+          contentParts.push({ type: "tool_use", toolUse: toolUseView });
           continue;
         }
       }
 
-      hiddenPayloads.push({
+      const payload = {
         label: `Structured content ${index + 1}`,
         raw: part,
-      });
+      };
+      hiddenPayloads.push(payload);
+      contentParts.push({ type: "hidden_payload", payload });
     }
   } else if (content != null) {
-    hiddenPayloads.push({
+    const payload = {
       label: "Structured content",
       raw: content,
-    });
+    };
+    hiddenPayloads.push(payload);
+    contentParts.push({ type: "hidden_payload", payload });
   }
+
+  const resolvedToolResults = describeToolResults(toolResults);
+  const orderedParts = buildOrderedMessageParts(contentParts, resolvedToolResults);
 
   return {
     textBlocks,
     toolUses,
-    toolResults: describeToolResults(toolResults),
+    toolResults: resolvedToolResults,
     hiddenPayloads,
+    parts: orderedParts,
   };
 }
 
@@ -432,6 +490,63 @@ function describeToolResults(
       raw: result,
     };
   });
+}
+
+function buildOrderedMessageParts(
+  contentParts: SelectedAttemptView["sessionSlice"][number]["parts"],
+  toolResults: SelectedAttemptView["sessionSlice"][number]["toolResults"],
+): SelectedAttemptView["sessionSlice"][number]["parts"] {
+  if (toolResults.length === 0) {
+    return contentParts;
+  }
+
+  const resultsByToolUseId = new Map<
+    string,
+    SelectedAttemptView["sessionSlice"][number]["toolResults"]
+  >();
+  const unmatched: SelectedAttemptView["sessionSlice"][number]["toolResults"] = [];
+
+  for (const toolResult of toolResults) {
+    const toolUseId =
+      typeof toolResult.raw === "object" &&
+      toolResult.raw !== null &&
+      "tool_use_id" in toolResult.raw &&
+      typeof (toolResult.raw as { tool_use_id?: unknown }).tool_use_id === "string"
+        ? (toolResult.raw as { tool_use_id: string }).tool_use_id
+        : toolResult.id;
+
+    if (!toolUseId) {
+      unmatched.push(toolResult);
+      continue;
+    }
+
+    const bucket = resultsByToolUseId.get(toolUseId) ?? [];
+    bucket.push(toolResult);
+    resultsByToolUseId.set(toolUseId, bucket);
+  }
+
+  const ordered: SelectedAttemptView["sessionSlice"][number]["parts"] = [];
+  for (const part of contentParts) {
+    ordered.push(part);
+    if (part.type !== "tool_use") {
+      continue;
+    }
+    const matchingResults = resultsByToolUseId.get(part.toolUse.id) ?? [];
+    for (const toolResult of matchingResults) {
+      ordered.push({ type: "tool_result", toolResult });
+    }
+    resultsByToolUseId.delete(part.toolUse.id);
+  }
+
+  for (const remaining of resultsByToolUseId.values()) {
+    unmatched.push(...remaining);
+  }
+
+  for (const toolResult of unmatched) {
+    ordered.push({ type: "tool_result", toolResult });
+  }
+
+  return ordered;
 }
 
 function summarizeToolUse(toolUse: Record<string, unknown>): string {

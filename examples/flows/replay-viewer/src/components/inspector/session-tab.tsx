@@ -1,38 +1,45 @@
-import { useEffect, useRef } from "react";
-import { revealConversationTranscript } from "../../lib/view-model";
+import { useRef, type RefObject } from "react";
+import { useStickyAutoFollow } from "../../hooks/use-sticky-auto-follow";
+import { resolveSessionRenderState } from "../../lib/session-render-state";
 import type { SelectedAttemptView, SessionListItemView } from "../../lib/view-model";
 import { ConversationMessage } from "./conversation-message";
 
 export function SessionTab({
+  scrollContainerRef,
   selectedAttempt,
   sessionItems,
   activeSessionId,
   sessionRevealProgress,
+  liveStreaming,
   onSessionChange,
 }: {
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
   selectedAttempt: SelectedAttemptView;
   sessionItems: SessionListItemView[];
   activeSessionId: string | null;
   sessionRevealProgress: number | null;
+  liveStreaming: boolean;
   onSessionChange(sessionId: string): void;
 }) {
   const activeSession =
     sessionItems.find((session) => session.id === activeSessionId) ?? sessionItems[0] ?? null;
   const sessionEndRef = useRef<HTMLDivElement | null>(null);
 
-  const renderedSessionSlice =
-    activeSession?.isStreamingSource && typeof sessionRevealProgress === "number"
-      ? revealConversationTranscript(activeSession.sessionSlice, sessionRevealProgress)
-      : (activeSession?.sessionSlice ?? []);
-  const animateConversation =
-    activeSession?.isStreamingSource && typeof sessionRevealProgress === "number";
+  const { renderedSessionSlice, animateConversation, autoFollowConversation } =
+    resolveSessionRenderState({
+      sessionSlice: activeSession?.sessionSlice ?? [],
+      isStreamingSource: activeSession?.isStreamingSource ?? false,
+      sessionRevealProgress,
+      liveStreaming,
+    });
 
-  useEffect(() => {
-    if (!activeSession || typeof sessionRevealProgress !== "number") {
-      return;
-    }
-    sessionEndRef.current?.scrollIntoView({ block: "end" });
-  }, [activeSession, renderedSessionSlice, sessionRevealProgress]);
+  useStickyAutoFollow({
+    scrollContainerRef,
+    endRef: sessionEndRef,
+    enabled: Boolean(activeSession) && autoFollowConversation,
+    resetKey: activeSession?.id ?? "none",
+    contentDependency: renderedSessionSlice,
+  });
 
   if (!activeSession) {
     return (

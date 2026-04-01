@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   advancePlaybackPlayhead,
   resolvePlaybackResumeMs,
+  resolveSelectedStepIndexAfterBundleUpdate,
 } from "../examples/flows/replay-viewer/src/hooks/use-playback-controller.js";
 import {
   buildGraph,
@@ -42,6 +43,10 @@ test("selectAttemptView shapes ACP session content into readable conversation pa
   assert.match(agentMessage?.toolUses[0]?.summary ?? "", /Read pr\.json/);
   assert.equal(agentMessage?.toolResults.length, 1);
   assert.match(agentMessage?.toolResults[0]?.preview ?? "", /stdout: \{"number": 181\}/);
+  assert.deepEqual(
+    agentMessage?.parts.map((part) => part.type),
+    ["text", "tool_use", "tool_result"],
+  );
   assert.equal(selected.rawEventSlice.length, 2);
   assert.equal(selected.traceEvents.length, 1);
 });
@@ -128,6 +133,42 @@ test("buildGraph applies playback progress to the active node during preview", (
   assert.equal(nodeMap.get("load_pr")?.status, "completed");
   assert.equal(nodeMap.get("extract_intent")?.status, "active");
   assert.ok((nodeMap.get("extract_intent")?.playbackProgress ?? 0) > 0);
+});
+
+test("buildGraph renders the last completed terminal step as completed instead of active", () => {
+  const polish = baseStep("polish", "acp", "ok");
+  polish.startedAt = "2026-03-27T07:26:02.000Z";
+  polish.finishedAt = "2026-03-27T07:26:20.000Z";
+  const finalize = baseStep("finalize", "compute", "ok");
+  finalize.startedAt = "2026-03-27T07:26:21.000Z";
+  finalize.finishedAt = "2026-03-27T07:26:22.000Z";
+
+  const bundle = makeBundle(finalize, {
+    steps: [polish, finalize],
+    flow: {
+      schema: "acpx.flow-definition-snapshot.v1",
+      name: "terminal-flow",
+      startAt: "polish",
+      nodes: {
+        polish: { nodeType: "acp", session: { handle: "main", isolated: false } },
+        finalize: { nodeType: "compute" },
+      },
+      edges: [{ from: "polish", to: "finalize" }],
+    },
+  });
+
+  const graph = buildGraph(bundle, 1);
+  const nodeMap = new Map(graph.nodes.map((node) => [node.id, node.data]));
+  const finalEdge = graph.edges.find(
+    (edge) => edge.source === "polish" && edge.target === "finalize",
+  );
+
+  assert.equal(nodeMap.get("finalize")?.status, "completed");
+  assert.equal(nodeMap.get("finalize")?.runOutcomeLabel, "completed");
+  assert.equal(nodeMap.get("finalize")?.runOutcomeAccent, "ok");
+  assert.equal(nodeMap.get("finalize")?.playbackProgress, undefined);
+  assert.equal(finalEdge?.animated, false);
+  assert.equal(finalEdge?.style?.stroke, "var(--edge-complete)");
 });
 
 test("buildGraph pulls pre-terminal handoff chains toward the bottom automatically", () => {
@@ -333,20 +374,19 @@ test("selectAttemptView falls back to the latest visible ACP session for non-ACP
   assert.match(selected.sessionSlice[0]?.textBlocks[0] ?? "", /Please inspect the PR diff/);
 });
 
-test("revealConversationSlice shows user turns instantly and only streams assistant text", () => {
+test("revealConversationSlice progressively reveals tool calls before the full assistant turn completes", () => {
   const step = baseStep("extract_intent", "acp", "ok");
   const bundle = makeBundle(step, {});
   const selected = selectAttemptView(bundle, 0);
 
   assert.ok(selected);
 
-  const partial = revealConversationSlice(selected.sessionSlice, 0.25);
+  const partial = revealConversationSlice(selected.sessionSlice, 0.8);
 
   assert.equal(partial.length, 2);
   assert.equal(partial[0]?.textBlocks[0], "Please inspect the PR diff.");
-  assert.match(partial[1]?.textBlocks[0] ?? "", /^I am ch/);
-  assert.equal(partial[1]?.toolUses.length, 0);
-  assert.equal(partial[1]?.toolResults.length, 0);
+  assert.match(partial[1]?.textBlocks[0] ?? "", /^I am checking/);
+  assert.equal(partial[1]?.toolUses.length, 1);
 
   const full = revealConversationSlice(selected.sessionSlice, 1);
   assert.equal(full.length, selected.sessionSlice.length);
@@ -509,6 +549,30 @@ test("advancePlaybackPlayhead applies playback speed and clamps to the timeline 
   assert.equal(advancePlaybackPlayhead(100, 400, 2, 1_000), 900);
   assert.equal(advancePlaybackPlayhead(100, 400, 5, 3_000), 2_100);
   assert.equal(advancePlaybackPlayhead(900, 400, 10, 1_000), 1_000);
+});
+
+test("resolveSelectedStepIndexAfterBundleUpdate follows the live edge when new steps append", () => {
+  const first = baseStep("load_pr", "action", "ok");
+  const second = baseStep("extract_intent", "acp", "ok");
+  const third = baseStep("judge_solution", "acp", "ok");
+  const previousBundle = makeBundle(second, { steps: [first, second] });
+  const nextBundle = makeBundle(third, { steps: [first, second, third] });
+
+  assert.equal(resolveSelectedStepIndexAfterBundleUpdate(previousBundle, nextBundle, 1, null), 2);
+});
+
+test("resolveSelectedStepIndexAfterBundleUpdate preserves rewind position while a run grows", () => {
+  const first = baseStep("load_pr", "action", "ok");
+  const second = baseStep("extract_intent", "acp", "ok");
+  const third = baseStep("judge_solution", "acp", "ok");
+  const previousBundle = makeBundle(second, { steps: [first, second] });
+  const nextBundle = makeBundle(third, { steps: [first, second, third] });
+
+  assert.equal(resolveSelectedStepIndexAfterBundleUpdate(previousBundle, nextBundle, 0, null), 0);
+  assert.equal(
+    resolveSelectedStepIndexAfterBundleUpdate(previousBundle, nextBundle, 1, "playing"),
+    1,
+  );
 });
 
 test("format helpers keep replay labels stable", () => {
