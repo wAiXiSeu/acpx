@@ -16,6 +16,11 @@ import { createFileSessionStore } from "./runtime/public/file-session-store.js";
 import { decodeAcpxRuntimeHandleState, writeHandleState } from "./runtime/public/handle-state.js";
 import { probeRuntime } from "./runtime/public/probe.js";
 import { deriveAgentFromSessionKey, type AcpxHandleState } from "./runtime/public/shared.js";
+import {
+  listSessions as _listSessions,
+  closeSession as _closeSession,
+  resolveSessionRecord as _resolveSessionRecord,
+} from "./session/persistence/repository.js";
 
 export { DEFAULT_AGENT_NAME, createFileSessionStore };
 export { AcpRuntimeError, isAcpRuntimeError } from "./runtime/public/errors.js";
@@ -24,6 +29,11 @@ export {
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
 } from "./runtime/public/handle-state.js";
+
+// Export session management functions for stable import paths
+export const listSessions = _listSessions;
+export const closeSession = _closeSession;
+export const resolveSessionRecord = _resolveSessionRecord;
 export type {
   AcpAgentRegistry,
   AcpFileSessionStoreOptions,
